@@ -1,0 +1,11 @@
+.DS_Store
+.build/
+.swiftpm/
+dist/
+release/
+*.dmg
+*.zip
+*.xcuserstate
+xcuserdata/
+.impeccable.md
+/Leaf-Native-preview.jpg
