@@ -120,10 +120,6 @@ final class ReaderStore {
     var importerVisible = false
     var appearanceVisible = false
     var searchText = ""
-    var fontSize: CGFloat = 18
-    var lineSpacing: CGFloat = 8
-    var pageWidth: CGFloat = 680
-    var readerTheme: ReaderTheme = .paper
     var loadedContent: LoadedBookContent?
     var contents: [BookContentEntry] = []
     var activeContentEntryID: String?
@@ -135,6 +131,82 @@ final class ReaderStore {
     var locationNavigation: LocationNavigation?
     var toast: String?
 
+    private enum Defaults {
+        static let fontSize = "leaf.appearance.fontSize"
+        static let lineSpacing = "leaf.appearance.lineSpacing"
+        static let pageWidth = "leaf.appearance.pageWidth"
+        static let theme = "leaf.appearance.theme"
+        static let librarySort = "leaf.librarySort"
+    }
+
+    var fontSize: CGFloat {
+        get {
+            access(keyPath: \.fontSize)
+            return (UserDefaults.standard.object(forKey: Defaults.fontSize) as? Double)
+                .map { CGFloat($0) } ?? 18
+        }
+        set {
+            withMutation(keyPath: \.fontSize) {
+                UserDefaults.standard.set(Double(newValue), forKey: Defaults.fontSize)
+            }
+        }
+    }
+
+    var lineSpacing: CGFloat {
+        get {
+            access(keyPath: \.lineSpacing)
+            return (UserDefaults.standard.object(forKey: Defaults.lineSpacing) as? Double)
+                .map { CGFloat($0) } ?? 8
+        }
+        set {
+            withMutation(keyPath: \.lineSpacing) {
+                UserDefaults.standard.set(
+                    Double(newValue),
+                    forKey: Defaults.lineSpacing
+                )
+            }
+        }
+    }
+
+    var pageWidth: CGFloat {
+        get {
+            access(keyPath: \.pageWidth)
+            return (UserDefaults.standard.object(forKey: Defaults.pageWidth) as? Double)
+                .map { CGFloat($0) } ?? 680
+        }
+        set {
+            withMutation(keyPath: \.pageWidth) {
+                UserDefaults.standard.set(Double(newValue), forKey: Defaults.pageWidth)
+            }
+        }
+    }
+
+    var readerTheme: ReaderTheme {
+        get {
+            access(keyPath: \.readerTheme)
+            return UserDefaults.standard.string(forKey: Defaults.theme)
+                .flatMap(ReaderTheme.init(rawValue:)) ?? .paper
+        }
+        set {
+            withMutation(keyPath: \.readerTheme) {
+                UserDefaults.standard.set(newValue.rawValue, forKey: Defaults.theme)
+            }
+        }
+    }
+
+    var librarySort: LibrarySort {
+        get {
+            access(keyPath: \.librarySort)
+            return UserDefaults.standard.string(forKey: Defaults.librarySort)
+                .flatMap(LibrarySort.init(rawValue:)) ?? .lastOpened
+        }
+        set {
+            withMutation(keyPath: \.librarySort) {
+                UserDefaults.standard.set(newValue.rawValue, forKey: Defaults.librarySort)
+            }
+        }
+    }
+
     enum ReaderTheme: String, CaseIterable, Identifiable {
         case paper
         case sepia
@@ -144,6 +216,22 @@ final class ReaderStore {
 
         var label: String {
             rawValue.capitalized
+        }
+    }
+
+    enum LibrarySort: String, CaseIterable, Identifiable {
+        case lastOpened
+        case title
+        case author
+
+        var id: Self { self }
+
+        var label: String {
+            switch self {
+            case .lastOpened: "Last Opened"
+            case .title: "Title"
+            case .author: "Author"
+            }
         }
     }
 
@@ -207,6 +295,37 @@ final class ReaderStore {
         }
         activeContentEntryID = current?.id
         return current?.title
+    }
+
+    func toggleBookmark(on book: BookRecord) {
+        book.isBookmarked.toggle()
+        if book.isBookmarked {
+            book.bookmarkLocator = book.lastLocator.isEmpty
+                ? Self.startLocator(for: book.format)
+                : book.lastLocator
+        } else {
+            book.bookmarkLocator = ""
+        }
+        showToast(book.isBookmarked ? "Page bookmarked" : "Bookmark removed")
+    }
+
+    private static func startLocator(for format: ReaderFormat) -> String {
+        switch format {
+        case .pdf:
+            "pdf:0"
+        case .cbz, .cbr, .unknown:
+            ""
+        default:
+            "text:0:0"
+        }
+    }
+
+    func navigateToBookmark(in book: BookRecord) {
+        guard book.isBookmarked, !book.bookmarkLocator.isEmpty else { return }
+        locationNavigation = LocationNavigation(
+            bookID: book.id,
+            locator: book.bookmarkLocator
+        )
     }
 
     func showToast(_ message: String) {

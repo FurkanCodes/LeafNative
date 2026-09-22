@@ -79,14 +79,28 @@ struct ReaderScreen: View {
                 }
                 .help("Highlight Selection (⇧⌘H)")
 
-                Button {
-                    book.isBookmarked.toggle()
-                    store.showToast(
-                        book.isBookmarked ? "Page bookmarked" : "Bookmark removed"
+                Menu {
+                    Button {
+                        store.toggleBookmark(on: book)
+                    } label: {
+                        Label(
+                            book.isBookmarked ? "Remove Bookmark" : "Bookmark Page",
+                            systemImage: book.isBookmarked
+                                ? "bookmark.slash" : "bookmark"
+                        )
+                    }
+
+                    Button {
+                        store.navigateToBookmark(in: book)
+                    } label: {
+                        Label("Go to Bookmark", systemImage: "bookmark.circle")
+                    }
+                    .disabled(
+                        !book.isBookmarked || book.bookmarkLocator.isEmpty
                     )
                 } label: {
                     Label(
-                        book.isBookmarked ? "Remove Bookmark" : "Bookmark",
+                        "Bookmark",
                         systemImage: book.isBookmarked ? "bookmark.fill" : "bookmark"
                     )
                 }

@@ -177,12 +177,23 @@ struct LibraryScreen: View {
                             .font(.headline)
                         Spacer()
                         Menu {
-                            Button("Last Opened") {}
-                            Button("Title") {}
-                            Button("Author") {}
+                            ForEach(ReaderStore.LibrarySort.allCases) { sort in
+                                Button {
+                                    store.librarySort = sort
+                                } label: {
+                                    if store.librarySort == sort {
+                                        Label(sort.label, systemImage: "checkmark")
+                                    } else {
+                                        Text(sort.label)
+                                    }
+                                }
+                            }
                         } label: {
-                            Label("Last Opened", systemImage: "arrow.up.arrow.down")
-                                .font(.caption)
+                            Label(
+                                store.librarySort.label,
+                                systemImage: "arrow.up.arrow.down"
+                            )
+                            .font(.caption)
                         }
                         .menuStyle(.borderlessButton)
                         .fixedSize()
@@ -193,7 +204,7 @@ struct LibraryScreen: View {
                             .frame(maxWidth: .infinity)
                     } else {
                         LazyVGrid(columns: columns, alignment: .leading, spacing: 30) {
-                            ForEach(books) { book in
+                            ForEach(sortedBooks) { book in
                                 Button {
                                     store.select(book)
                                 } label: {
@@ -227,6 +238,30 @@ struct LibraryScreen: View {
                     store.importerVisible = true
                 } label: {
                     Label("Add Book", systemImage: "plus")
+                }
+            }
+        }
+    }
+
+    private var sortedBooks: [BookRecord] {
+        switch store.librarySort {
+        case .lastOpened:
+            books
+        case .title:
+            books.sorted {
+                $0.title.localizedCaseInsensitiveCompare($1.title)
+                    == .orderedAscending
+            }
+        case .author:
+            books.sorted {
+                switch $0.author.localizedCaseInsensitiveCompare($1.author) {
+                case .orderedSame:
+                    $0.title.localizedCaseInsensitiveCompare($1.title)
+                        == .orderedAscending
+                case .orderedAscending:
+                    true
+                case .orderedDescending:
+                    false
                 }
             }
         }

@@ -46,6 +46,9 @@ struct RootView: View {
         .task {
             seedIfNeeded()
         }
+        .onOpenURL { url in
+            importURL(url)
+        }
         .onReceive(
             NotificationCenter.default.publisher(for: .leafOpenBook)
         ) { _ in
@@ -110,7 +113,24 @@ struct RootView: View {
     private func importSelection(_ result: Result<[URL], Error>) {
         do {
             guard let url = try result.get().first else { return }
+            importURL(url)
+        } catch {
+            store.showToast(error.localizedDescription)
+        }
+    }
+
+    private func importURL(_ url: URL) {
+        do {
             let imported = try ImportService.importBook(from: url)
+            if !imported.contentHash.isEmpty,
+               let existing = books.first(where: {
+                   $0.contentHash == imported.contentHash
+               }) {
+                try? FileManager.default.removeItem(at: imported.localURL)
+                store.select(existing)
+                store.showToast("\(existing.title) is already in your Library")
+                return
+            }
             let tones: [CoverTone] = [.ochre, .forest, .clay, .ink, .linen]
             let book = BookRecord(
                 title: imported.title,
@@ -118,6 +138,7 @@ struct RootView: View {
                 format: imported.format,
                 filePath: imported.localURL.path,
                 currentChapter: imported.chapter,
+                contentHash: imported.contentHash,
                 coverTone: tones[books.count % tones.count]
             )
             modelContext.insert(book)
