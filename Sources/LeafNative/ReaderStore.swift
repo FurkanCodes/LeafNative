@@ -200,6 +200,15 @@ final class ReaderStore {
         return current?.title
     }
 
+    func updateCurrentTextSection(charIndex: Int) -> String? {
+        let current = contents.last {
+            guard let offset = $0.textOffset else { return false }
+            return offset <= charIndex
+        }
+        activeContentEntryID = current?.id
+        return current?.title
+    }
+
     func showToast(_ message: String) {
         toast = message
         Task { @MainActor in

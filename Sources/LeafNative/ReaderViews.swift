@@ -129,6 +129,12 @@ struct ReaderScreen: View {
                 annotations: annotations,
                 book: book
             )
+        case .epub(let text, _):
+            NativeTextReader(
+                content: text,
+                annotations: annotations,
+                book: book
+            )
         case .pdf(let url):
             PDFReaderView(url: url, book: book)
         case .comic(let imageData):
@@ -169,17 +175,35 @@ struct ReaderScreen: View {
         }
     }
 
+    @MainActor
     private func loadBook() {
         store.isLoading = true
         store.loadingError = nil
         store.loadedContent = nil
-        do {
-            store.loadedContent = try ContentLoader.load(book)
-            store.setContents(try ContentLoader.tableOfContents(for: book))
-            store.isLoading = false
-        } catch {
-            store.loadingError = error.localizedDescription
-            store.isLoading = false
+        let format = book.format
+        let fileURL = book.fileURL
+        Task {
+            do {
+                let content = try await Task.detached(priority: .userInitiated) {
+                    try ContentLoader.load(format: format, fileURL: fileURL)
+                }.value
+                store.loadedContent = content
+                if case .epub(_, let entries) = content {
+                    store.setContents(entries)
+                } else {
+                    let toc = try await Task.detached(priority: .utility) {
+                        try ContentLoader.tableOfContents(
+                            format: format,
+                            fileURL: fileURL
+                        )
+                    }.value
+                    store.setContents(toc)
+                }
+                store.isLoading = false
+            } catch {
+                store.loadingError = error.localizedDescription
+                store.isLoading = false
+            }
         }
     }
 }

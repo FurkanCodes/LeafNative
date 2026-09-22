@@ -20,20 +20,19 @@ enum ContentLoadingError: LocalizedError {
     }
 }
 
-@MainActor
 enum ContentLoader {
-    static func load(_ book: BookRecord) throws -> LoadedBookContent {
-        if book.format == .sample {
+    static func load(format: ReaderFormat, fileURL: URL?) throws -> LoadedBookContent {
+        if format == .sample {
             return .attributedText(NSAttributedString(string: sampleChapter))
         }
 
-        guard let url = book.fileURL,
+        guard let url = fileURL,
               FileManager.default.fileExists(atPath: url.path)
         else {
             throw ContentLoadingError.missingFile
         }
 
-        switch book.format {
+        switch format {
         case .pdf:
             return .pdf(url)
         case .txt:
@@ -58,7 +57,7 @@ enum ContentLoader {
                 NSAttributedString(string: try readDOCX(url))
             )
         case .epub:
-            return .attributedText(try readEPUB(url))
+            return try readEPUB(url)
         case .fb2:
             return .attributedText(
                 NSAttributedString(string: try readFB2(url))
@@ -74,18 +73,21 @@ enum ContentLoader {
         }
     }
 
-    static func tableOfContents(for book: BookRecord) throws -> [BookContentEntry] {
-        if book.format == .sample {
+    static func tableOfContents(
+        format: ReaderFormat,
+        fileURL: URL?
+    ) throws -> [BookContentEntry] {
+        if format == .sample {
             return sampleContents()
         }
 
-        guard let url = book.fileURL,
+        guard let url = fileURL,
               FileManager.default.fileExists(atPath: url.path)
         else {
             throw ContentLoadingError.missingFile
         }
 
-        switch book.format {
+        switch format {
         case .pdf:
             return pdfContents(at: url)
         default:
@@ -226,29 +228,40 @@ enum ContentLoader {
         )
     }
 
-    private static func readEPUB(_ url: URL) throws -> NSAttributedString {
+    private static func readEPUB(_ url: URL) throws -> LoadedBookContent {
         let archive = try Archive(url: url, accessMode: .read)
-        let htmlEntries = archive
-            .filter {
-                !$0.path.hasPrefix("__MACOSX") &&
-                    ["html", "htm", "xhtml"].contains(
-                        URL(fileURLWithPath: $0.path).pathExtension.lowercased()
-                    )
-            }
-            .sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
-            .prefix(80)
+        let package = (try? epubPackage(from: archive)) ?? EpubPackage()
+        var spinePaths = package.spinePaths
+
+        if spinePaths.isEmpty {
+            spinePaths = archive
+                .filter {
+                    !$0.path.hasPrefix("__MACOSX") &&
+                        ["html", "htm", "xhtml"].contains(
+                            URL(fileURLWithPath: $0.path).pathExtension.lowercased()
+                        )
+                }
+                .sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
+                .prefix(80)
+                .map { $0.path }
+        }
 
         let result = NSMutableAttributedString()
-        for entry in htmlEntries {
+        var chapterOffsets: [String: Int] = [:]
+        var readOrder: [String] = []
+        for path in spinePaths {
+            guard let entry = archive[path] else { continue }
             var data = Data()
             _ = try archive.extract(entry) { data.append($0) }
-            if let chapter = try? htmlAttributedString(from: data),
-               chapter.length > 0 {
-                if result.length > 0 {
-                    result.append(NSAttributedString(string: "\n\n"))
-                }
-                result.append(chapter)
+            guard let chapter = try? htmlAttributedString(from: data),
+                  chapter.length > 0
+            else { continue }
+            if result.length > 0 {
+                result.append(NSAttributedString(string: "\n\n"))
             }
+            chapterOffsets[path] = result.length
+            readOrder.append(path)
+            result.append(chapter)
         }
 
         guard result.length > 0 else {
@@ -256,7 +269,108 @@ enum ContentLoader {
                 "No readable XHTML chapters were found."
             )
         }
-        return result
+
+        var contents: [BookContentEntry] = []
+        var ordinal = 0
+        for tocEntry in package.tocEntries where chapterOffsets[tocEntry.path] != nil {
+            let offset = chapterOffsets[tocEntry.path]!
+            contents.append(
+                BookContentEntry(
+                    id: "epub:\(ordinal):\(offset)",
+                    title: tocEntry.title,
+                    locator: "text:\(offset):\(min(60, result.length - offset))",
+                    level: min(tocEntry.level, 3)
+                )
+            )
+            ordinal += 1
+        }
+
+        if contents.isEmpty {
+            for path in readOrder {
+                guard let offset = chapterOffsets[path] else { continue }
+                contents.append(
+                    BookContentEntry(
+                        id: "epub:\(ordinal):\(offset)",
+                        title: URL(fileURLWithPath: path)
+                            .deletingPathExtension()
+                            .lastPathComponent,
+                        locator: "text:\(offset):\(min(60, result.length - offset))",
+                        level: 0
+                    )
+                )
+                ordinal += 1
+            }
+        }
+
+        return .epub(result, contents: contents)
+    }
+
+    private static func epubPackage(from archive: Archive) throws -> EpubPackage {
+        let containerData = try archiveData(
+            named: "META-INF/container.xml",
+            in: archive
+        )
+        guard let opfPath = ContainerParser.parse(containerData) else {
+            throw ContentLoadingError.unreadable(
+                "The EPUB package descriptor is missing."
+            )
+        }
+        let opfData = try archiveData(named: opfPath, in: archive)
+        let opfDirectory = (opfPath as NSString).deletingLastPathComponent
+        let opf = OPFParser.parse(opfData, base: opfDirectory)
+
+        var package = EpubPackage()
+        package.spinePaths = opf.spineIDRefs.compactMap { idRef in
+            guard let item = opf.manifest[idRef],
+                  ["application/xhtml+xml", "text/html"].contains(item.mediaType)
+            else { return nil }
+            return item.path
+        }
+
+        if let navItem = opf.manifest.values.first(where: {
+            $0.properties.contains("nav")
+        }), let navEntry = archive[navItem.path] {
+            var navData = Data()
+            _ = try? archive.extract(navEntry) { navData.append($0) }
+            let base = (navItem.path as NSString).deletingLastPathComponent
+            package.tocEntries = EpubNavParser.parse(navData, base: base)
+        }
+
+        if package.tocEntries.isEmpty,
+           let ncxItem = opf.manifest.values.first(where: {
+               $0.mediaType == "application/x-dtbncx+xml"
+           }), let ncxEntry = archive[ncxItem.path] {
+            var ncxData = Data()
+            _ = try? archive.extract(ncxEntry) { ncxData.append($0) }
+            let base = (ncxItem.path as NSString).deletingLastPathComponent
+            package.tocEntries = NCXParser.parse(ncxData, base: base)
+        }
+
+        return package
+    }
+
+    fileprivate static func resolveArchivePath(_ href: String, base: String) -> String {
+        let pathOnly = href.split(
+            separator: "#",
+            maxSplits: 1,
+            omittingEmptySubsequences: false
+        ).first.map(String.init) ?? href
+        let decoded = pathOnly.removingPercentEncoding ?? pathOnly
+        let combined: String
+        if decoded.hasPrefix("/") || base.isEmpty {
+            combined = decoded
+        } else {
+            combined = base + "/" + decoded
+        }
+        var resolved: [String] = []
+        for component in combined.split(separator: "/") {
+            if component == ".." {
+                _ = resolved.popLast()
+            } else if component != "." {
+                resolved.append(String(component))
+            }
+        }
+        return resolved.joined(separator: "/")
     }
 
     private static func readFB2(_ url: URL) throws -> String {
@@ -505,5 +619,300 @@ private enum MOBITextExtractor {
             | (UInt32(data[offset + 1]) << 16)
             | (UInt32(data[offset + 2]) << 8)
             | UInt32(data[offset + 3])
+    }
+}
+
+private struct EpubPackage {
+    var spinePaths: [String] = []
+    var tocEntries: [EpubTOCEntry] = []
+}
+
+private struct EpubTOCEntry {
+    let path: String
+    let title: String
+    let level: Int
+}
+
+private struct EpubManifestItem {
+    let path: String
+    let mediaType: String
+    let properties: Set<String>
+}
+
+private final class ContainerParser: NSObject, XMLParserDelegate {
+    private var rootfile: String?
+
+    static func parse(_ data: Data) -> String? {
+        let delegate = ContainerParser()
+        let parser = XMLParser(data: data)
+        parser.delegate = delegate
+        parser.parse()
+        return delegate.rootfile
+    }
+
+    func parser(
+        _ parser: XMLParser,
+        didStartElement elementName: String,
+        namespaceURI: String?,
+        qualifiedName qName: String?,
+        attributes attributeDict: [String: String] = [:]
+    ) {
+        guard elementName == "rootfile", rootfile == nil else { return }
+        rootfile = attributeDict["full-path"]
+    }
+}
+
+private final class OPFParser: NSObject, XMLParserDelegate {
+    private(set) var manifest: [String: EpubManifestItem] = [:]
+    private(set) var spineIDRefs: [String] = []
+    private var base = ""
+    private var inSpine = false
+
+    static func parse(_ data: Data, base: String) -> OPFParser {
+        let delegate = OPFParser()
+        delegate.base = base
+        let parser = XMLParser(data: data)
+        parser.delegate = delegate
+        parser.parse()
+        return delegate
+    }
+
+    func parser(
+        _ parser: XMLParser,
+        didStartElement elementName: String,
+        namespaceURI: String?,
+        qualifiedName qName: String?,
+        attributes attributeDict: [String: String] = [:]
+    ) {
+        let name = elementName.components(separatedBy: ":").last ?? elementName
+        switch name {
+        case "item":
+            guard let id = attributeDict["id"],
+                  let href = attributeDict["href"]
+            else { return }
+            manifest[id] = EpubManifestItem(
+                path: ContentLoader.resolveArchivePath(href, base: base),
+                mediaType: attributeDict["media-type"] ?? "",
+                properties: Set(
+                    (attributeDict["properties"] ?? "")
+                        .split(separator: " ")
+                        .map(String.init)
+                )
+            )
+        case "spine":
+            inSpine = true
+        case "itemref" where inSpine:
+            if attributeDict["linear"]?.lowercased() != "no",
+               let idRef = attributeDict["idref"] {
+                spineIDRefs.append(idRef)
+            }
+        default:
+            break
+        }
+    }
+
+    func parser(
+        _ parser: XMLParser,
+        didEndElement elementName: String,
+        namespaceURI: String?,
+        qualifiedName qName: String?
+    ) {
+        let name = elementName.components(separatedBy: ":").last ?? elementName
+        if name == "spine" {
+            inSpine = false
+        }
+    }
+}
+
+private final class EpubNavParser: NSObject, XMLParserDelegate {
+    private var entries: [EpubTOCEntry] = []
+    private var base = ""
+    private var tocNavDepth = 0
+    private var listDepth = 0
+    private var inLink = false
+    private var linkHref = ""
+    private var linkLevel = 0
+    private var linkText = ""
+
+    static func parse(_ data: Data, base: String) -> [EpubTOCEntry] {
+        let delegate = EpubNavParser()
+        delegate.base = base
+        let parser = XMLParser(data: data)
+        parser.delegate = delegate
+        parser.parse()
+        return delegate.entries
+    }
+
+    func parser(
+        _ parser: XMLParser,
+        didStartElement elementName: String,
+        namespaceURI: String?,
+        qualifiedName qName: String?,
+        attributes attributeDict: [String: String] = [:]
+    ) {
+        let name = (
+            elementName.components(separatedBy: ":").last ?? elementName
+        ).lowercased()
+        if name == "nav" {
+            let type = attributeDict["epub:type"] ?? attributeDict["type"] ?? ""
+            if tocNavDepth == 0,
+               type.split(separator: " ").contains("toc") {
+                tocNavDepth = 1
+            } else if tocNavDepth > 0 {
+                tocNavDepth += 1
+            }
+            return
+        }
+        guard tocNavDepth > 0 else { return }
+        if name == "ol" {
+            listDepth += 1
+        } else if name == "a", !inLink {
+            inLink = true
+            linkHref = attributeDict["href"] ?? ""
+            linkLevel = max(0, listDepth - 1)
+            linkText = ""
+        }
+    }
+
+    func parser(_ parser: XMLParser, foundCharacters string: String) {
+        guard inLink else { return }
+        linkText += string
+    }
+
+    func parser(
+        _ parser: XMLParser,
+        didEndElement elementName: String,
+        namespaceURI: String?,
+        qualifiedName qName: String?
+    ) {
+        let name = (
+            elementName.components(separatedBy: ":").last ?? elementName
+        ).lowercased()
+        if name == "a", inLink {
+            inLink = false
+            let title = linkText
+                .replacingOccurrences(
+                    of: "\\s+",
+                    with: " ",
+                    options: .regularExpression
+                )
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !linkHref.isEmpty, !title.isEmpty {
+                entries.append(
+                    EpubTOCEntry(
+                        path: ContentLoader.resolveArchivePath(
+                            linkHref,
+                            base: base
+                        ),
+                        title: title,
+                        level: linkLevel
+                    )
+                )
+            }
+            return
+        }
+        if name == "ol", listDepth > 0 {
+            listDepth -= 1
+            return
+        }
+        if name == "nav", tocNavDepth > 0 {
+            tocNavDepth -= 1
+            if tocNavDepth == 0 {
+                parser.abortParsing()
+            }
+        }
+    }
+}
+
+private final class NCXParser: NSObject, XMLParserDelegate {
+    private var results: [(seq: Int, entry: EpubTOCEntry)] = []
+    private var base = ""
+    private var navPointDepth = 0
+    private var seq = 0
+    private var seqStack: [Int] = []
+    private var srcStack: [String] = []
+    private var labelStack: [String] = []
+    private var labelDepth = 0
+
+    static func parse(_ data: Data, base: String) -> [EpubTOCEntry] {
+        let delegate = NCXParser()
+        delegate.base = base
+        let parser = XMLParser(data: data)
+        parser.delegate = delegate
+        parser.parse()
+        return delegate.results
+            .sorted { $0.seq < $1.seq }
+            .map { $0.entry }
+    }
+
+    func parser(
+        _ parser: XMLParser,
+        didStartElement elementName: String,
+        namespaceURI: String?,
+        qualifiedName qName: String?,
+        attributes attributeDict: [String: String] = [:]
+    ) {
+        let name = elementName.components(separatedBy: ":").last ?? elementName
+        switch name {
+        case "navPoint":
+            navPointDepth += 1
+            seqStack.append(seq)
+            seq += 1
+            srcStack.append("")
+            labelStack.append("")
+        case "text" where navPointDepth > 0 && labelStack.last?.isEmpty == true:
+            labelDepth = navPointDepth
+        case "content" where navPointDepth > 0:
+            let src = attributeDict["src"] ?? ""
+            if srcStack.indices.contains(navPointDepth - 1),
+               srcStack[navPointDepth - 1].isEmpty {
+                srcStack[navPointDepth - 1] = src
+            }
+        default:
+            break
+        }
+    }
+
+    func parser(_ parser: XMLParser, foundCharacters string: String) {
+        guard labelDepth == navPointDepth, labelDepth > 0,
+              !labelStack.isEmpty else { return }
+        labelStack[labelStack.count - 1] += string
+    }
+
+    func parser(
+        _ parser: XMLParser,
+        didEndElement elementName: String,
+        namespaceURI: String?,
+        qualifiedName qName: String?
+    ) {
+        let name = elementName.components(separatedBy: ":").last ?? elementName
+        switch name {
+        case "text":
+            labelDepth = 0
+        case "navPoint" where navPointDepth > 0:
+            let level = navPointDepth - 1
+            let startSeq = seqStack.popLast() ?? 0
+            let src = srcStack.popLast() ?? ""
+            let label = (labelStack.popLast() ?? "")
+                .replacingOccurrences(
+                    of: "\\s+",
+                    with: " ",
+                    options: .regularExpression
+                )
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            navPointDepth -= 1
+            if !src.isEmpty, !label.isEmpty {
+                results.append((
+                    startSeq,
+                    EpubTOCEntry(
+                        path: ContentLoader.resolveArchivePath(src, base: base),
+                        title: label,
+                        level: level
+                    )
+                ))
+            }
+        default:
+            break
+        }
     }
 }
