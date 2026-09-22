@@ -1,3 +1,4 @@
+import AppKit
 import SwiftData
 import SwiftUI
 import UniformTypeIdentifiers
@@ -45,9 +46,15 @@ struct RootView: View {
         .animation(.snappy(duration: 0.2), value: store.toast)
         .task {
             seedIfNeeded()
+            store.checkForUpdates(userInitiated: false)
         }
         .onOpenURL { url in
             importURL(url)
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(for: .leafCheckUpdates)
+        ) { _ in
+            store.checkForUpdates(userInitiated: true)
         }
         .onReceive(
             NotificationCenter.default.publisher(for: .leafOpenBook)
@@ -74,6 +81,27 @@ struct RootView: View {
             NotificationCenter.default.publisher(for: .leafNextPage)
         ) { _ in
             store.nextPage()
+        }
+        .alert(
+            "Update Available",
+            isPresented: $store.updateAlertVisible
+        ) {
+            Button("Download & Install") {
+                store.installAvailableUpdate()
+            }
+            if let url = store.availableUpdate?.htmlURL {
+                Button("View Release") {
+                    NSWorkspace.shared.open(url)
+                }
+            }
+            Button("Later", role: .cancel) {}
+        } message: {
+            if let release = store.availableUpdate {
+                Text(
+                    "Leaf Native \(release.version) is ready — "
+                        + "you're on \(UpdateChecker.currentVersion)."
+                )
+            }
         }
     }
 
