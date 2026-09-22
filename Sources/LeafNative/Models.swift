@@ -88,6 +88,7 @@ final class BookRecord {
     var progress: Double
     var lastOpened: Date
     var currentChapter: String
+    var lastLocator: String = ""
     var coverToneRaw: String
     var isFavorite: Bool
     var isBookmarked: Bool
@@ -101,6 +102,7 @@ final class BookRecord {
         progress: Double = 0,
         lastOpened: Date = .now,
         currentChapter: String = "Start reading",
+        lastLocator: String = "",
         coverTone: CoverTone = .ochre,
         isFavorite: Bool = false,
         isBookmarked: Bool = false
@@ -113,6 +115,7 @@ final class BookRecord {
         self.progress = progress
         self.lastOpened = lastOpened
         self.currentChapter = currentChapter
+        self.lastLocator = lastLocator
         self.coverToneRaw = coverTone.rawValue
         self.isFavorite = isFavorite
         self.isBookmarked = isBookmarked
@@ -188,10 +191,17 @@ struct BookContentEntry: Identifiable, Equatable, Sendable {
         guard parts.count == 2, parts[0] == "pdf" else { return nil }
         return Int(parts[1])
     }
+
+    var textOffset: Int? {
+        let parts = locator.split(separator: ":")
+        guard parts.count == 3, parts[0] == "text" else { return nil }
+        return Int(parts[1])
+    }
 }
 
-enum LoadedBookContent {
+enum LoadedBookContent: Sendable {
     case attributedText(NSAttributedString)
+    case epub(NSAttributedString, contents: [BookContentEntry])
     case pdf(URL)
     case comic([Data])
     case quickLook(URL)

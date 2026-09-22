@@ -50,9 +50,25 @@ struct NativeTextReader: NSViewRepresentable {
         }
 
         scrollView.documentView = textView
+        scrollView.contentView.postsBoundsChangedNotifications = true
+        NotificationCenter.default.addObserver(
+            context.coordinator,
+            selector: #selector(Coordinator.boundsChanged(_:)),
+            name: NSView.boundsDidChangeNotification,
+            object: scrollView.contentView
+        )
         context.coordinator.textView = textView
         context.coordinator.scrollView = scrollView
         return scrollView
+    }
+
+    static func dismantleNSView(_ scrollView: NSScrollView, coordinator: Coordinator) {
+        coordinator.positionSaveTask?.cancel()
+        NotificationCenter.default.removeObserver(
+            coordinator,
+            name: NSView.boundsDidChangeNotification,
+            object: scrollView.contentView
+        )
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
@@ -79,6 +95,7 @@ struct NativeTextReader: NSViewRepresentable {
             }
         )
 
+        context.coordinator.book = book
         if context.coordinator.styleSignature != styleSignature {
             context.coordinator.styleSignature = styleSignature
             context.coordinator.annotationSnapshots = annotationSnapshots
@@ -90,6 +107,20 @@ struct NativeTextReader: NSViewRepresentable {
                     isSample: book.format == .sample
                 )
             )
+            if context.coordinator.restoredBookID != book.id {
+                context.coordinator.restoredBookID = book.id
+                if let range = textRange(from: book.lastLocator),
+                   range.location < (textView.textStorage?.length ?? 0) {
+                    let storageLength = textView.textStorage?.length ?? 0
+                    let clamped = NSRange(
+                        location: range.location,
+                        length: min(range.length, storageLength - range.location)
+                    )
+                    Task { @MainActor in
+                        textView.scrollRangeToVisible(clamped)
+                    }
+                }
+            }
         } else if context.coordinator.annotationSnapshots != annotationSnapshots {
             updateHighlights(
                 in: textView,
@@ -318,17 +349,48 @@ struct NativeTextReader: NSViewRepresentable {
         }
 
         let store: ReaderStore
-        let book: BookRecord
+        var book: BookRecord
         weak var textView: NSTextView?
         weak var scrollView: NSScrollView?
         var styleSignature: StyleSignature?
         var annotationSnapshots: [UUID: AnnotationSnapshot] = [:]
         var lastSearch = ""
         var lastNavigationRequest: UUID?
+        var restoredBookID: UUID?
+        var positionSaveTask: Task<Void, Never>?
 
         init(store: ReaderStore, book: BookRecord) {
             self.store = store
             self.book = book
+        }
+
+        @objc func boundsChanged(_ notification: Notification) {
+            guard let textView,
+                  let clipView = notification.object as? NSClipView
+            else { return }
+            guard restoredBookID == book.id || book.lastLocator.isEmpty else {
+                return
+            }
+            let charIndex = textView.characterIndexForInsertion(
+                at: clipView.bounds.origin
+            )
+            positionSaveTask?.cancel()
+            positionSaveTask = Task { [weak self] in
+                try? await Task.sleep(for: .milliseconds(400))
+                guard !Task.isCancelled else { return }
+                self?.persistPosition(charIndex: charIndex)
+            }
+        }
+
+        private func persistPosition(charIndex: Int) {
+            guard charIndex >= 0 else { return }
+            restoredBookID = book.id
+            book.lastLocator = "text:\(charIndex):0"
+            let total = max(1, textView?.textStorage?.length ?? 1)
+            book.progress = min(1, Double(charIndex) / Double(total))
+            if let section = store.updateCurrentTextSection(charIndex: charIndex) {
+                book.currentChapter = section
+            }
         }
 
         func textViewDidChangeSelection(_ notification: Notification) {
@@ -484,6 +546,13 @@ struct PDFReaderView: NSViewRepresentable {
         view.backgroundColor = store.readerTheme.nsBackground
         store.activePDFView = view
 
+        if let pageIndex = Self.pageIndex(from: book.lastLocator),
+           let page = view.document?.page(at: pageIndex) {
+            Task { @MainActor in
+                view.go(to: page)
+            }
+        }
+
         NotificationCenter.default.addObserver(
             context.coordinator,
             selector: #selector(Coordinator.pageChanged),
@@ -494,6 +563,7 @@ struct PDFReaderView: NSViewRepresentable {
     }
 
     func updateNSView(_ view: PDFView, context: Context) {
+        context.coordinator.book = book
         view.backgroundColor = store.readerTheme.nsBackground
         if store.activePDFView !== view {
             store.activePDFView = view
@@ -510,6 +580,12 @@ struct PDFReaderView: NSViewRepresentable {
             context.coordinator.lastNavigationRequest = navigation.requestID
             navigate(to: navigation.locator, in: view)
         }
+    }
+
+    private static func pageIndex(from locator: String) -> Int? {
+        let parts = locator.split(separator: ":")
+        guard parts.count == 2, parts[0] == "pdf" else { return nil }
+        return Int(parts[1])
     }
 
     private func navigate(to locator: String, in view: PDFView) {
@@ -529,7 +605,7 @@ struct PDFReaderView: NSViewRepresentable {
     @MainActor
     final class Coordinator: NSObject {
         let store: ReaderStore
-        let book: BookRecord
+        var book: BookRecord
         var lastNavigationRequest: UUID?
 
         init(store: ReaderStore, book: BookRecord) {
@@ -545,6 +621,7 @@ struct PDFReaderView: NSViewRepresentable {
             let index = document.index(for: page)
             let count = max(1, document.pageCount)
             book.progress = Double(index + 1) / Double(count)
+            book.lastLocator = "pdf:\(index)"
             if let section = store.updateCurrentPDFSection(pageIndex: index) {
                 book.currentChapter = "\(section) · Page \(index + 1) of \(count)"
             } else {
