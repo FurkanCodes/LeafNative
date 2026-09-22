@@ -376,9 +376,10 @@ enum ChatGPTAuth {
         )
         request.httpBody = body
             .map { key, value in
-                "\(key)=\(value.addingPercentEncoding(
+                let encoded = value.addingPercentEncoding(
                     withAllowedCharacters: .urlQueryAllowed
-                ) ?? value)"
+                ) ?? value
+                return "\(key)=\(encoded)"
             }
             .joined(separator: "&")
             .data(using: .utf8)
