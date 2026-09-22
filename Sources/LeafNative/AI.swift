@@ -432,7 +432,7 @@ enum ChatGPTAuth {
 private final class LoopbackServer {
     private var listener: NWListener?
 
-    private final class Once {
+    private final class Once: @unchecked Sendable {
         private let lock = NSLock()
         private var fired = false
 
