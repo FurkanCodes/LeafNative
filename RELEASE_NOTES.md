@@ -1,17 +1,17 @@
-# Leaf Native 1.1.0
+# Leaf Native 1.2.0
 
-The second release of Leaf Native: in-app auto-updates, a proper EPUB reader core, and polish across the library.
+AI reading assistance, built for researchers.
 
 ## Highlights
 
-- **Auto-update** — Leaf now checks GitHub Releases on launch and from the app menu; download and install updates without leaving the app (Settings → Software Update)
-- **Real EPUB support** — chapters follow the spine's reading order and the sidebar shows the book's own table of contents (nav/NCX)
-- **Resume where you left off** — reading position and page now persist for every format, not just PDFs
-- **Position bookmarks** — bookmark a spot and jump back to it from the reader toolbar
-- **Faster loading** — large books parse off the main thread, no more UI freezes
-- **Finder "Open With"** — open books in Leaf directly from Finder
-- **Library sorting** — sort by Last Opened, Title, or Author; appearance and sort choices now persist across launches
-- **Safer highlights** — PDF edits are written atomically so a crash can't corrupt a book
+- **Ask AI About This** — select any passage in a PDF or text book, right-click → *Ask AI About This*, and chat with the book's context attached
+- **AI panel** — a sparkles button in the reader toolbar opens a chat that knows which book, chapter, and passage you're on
+- **One-tap actions** — summarize the current section, or generate review quiz questions from your highlights
+- **Three providers** — pick in Settings → AI Assistant:
+  - *Apple Intelligence* — free, private, on-device (macOS 26+)
+  - *OpenAI API key* — bring your own key (stored in Keychain), pick any model
+  - *ChatGPT account* — experimental sign-in using your ChatGPT subscription. Relies on undocumented OpenAI internals and may stop working — if it breaks, the other providers still work
+- Your API key and sign-in tokens live in the macOS Keychain, never in files
 
 ## Downloads
 
@@ -19,7 +19,7 @@ The second release of Leaf Native: in-app auto-updates, a proper EPUB reader cor
 - **ZIP** — portable app bundle
 - **SHA256SUMS.txt** — checksums for both downloads
 
-Leaf Native requires macOS 15 or later.
+Leaf Native requires macOS 15 or later (macOS 26 for the on-device Apple Intelligence provider).
 
 ## First Launch (important)
 

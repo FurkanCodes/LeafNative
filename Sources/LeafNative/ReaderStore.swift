@@ -150,12 +150,71 @@ final class ReaderStore {
     var availableUpdate: GitHubRelease?
     var updateAlertVisible = false
 
+    var aiStatus: AIStatus = .idle
+    var aiMessages: [AIMessage] = []
+    var aiPanelVisible = false
+    var aiDraft = ""
+    var aiContextQuote = ""
+    var chatGPTSignedIn = ChatGPTAuth.credentials != nil
+    var openAIKeyPresent =
+        KeychainStore.get(account: "openai-api-key") != nil
+
     private enum Defaults {
         static let fontSize = "leaf.appearance.fontSize"
         static let lineSpacing = "leaf.appearance.lineSpacing"
         static let pageWidth = "leaf.appearance.pageWidth"
         static let theme = "leaf.appearance.theme"
         static let librarySort = "leaf.librarySort"
+        static let aiProvider = "leaf.ai.provider"
+        static let openAIModel = "leaf.ai.openAIModel"
+        static let chatGPTModel = "leaf.ai.chatGPTModel"
+    }
+
+    var aiProvider: AIProvider {
+        get {
+            access(keyPath: \.aiProvider)
+            return AIProvider(
+                rawValue: UserDefaults.standard
+                    .string(forKey: Defaults.aiProvider) ?? ""
+            ) ?? .appleIntelligence
+        }
+        set {
+            withMutation(keyPath: \.aiProvider) {
+                UserDefaults.standard.set(
+                    newValue.rawValue, forKey: Defaults.aiProvider
+                )
+            }
+        }
+    }
+
+    var openAIModel: String {
+        get {
+            access(keyPath: \.openAIModel)
+            return UserDefaults.standard
+                .string(forKey: Defaults.openAIModel) ?? "gpt-4o-mini"
+        }
+        set {
+            withMutation(keyPath: \.openAIModel) {
+                UserDefaults.standard.set(
+                    newValue, forKey: Defaults.openAIModel
+                )
+            }
+        }
+    }
+
+    var chatGPTModel: String {
+        get {
+            access(keyPath: \.chatGPTModel)
+            return UserDefaults.standard
+                .string(forKey: Defaults.chatGPTModel) ?? "gpt-5.4-mini"
+        }
+        set {
+            withMutation(keyPath: \.chatGPTModel) {
+                UserDefaults.standard.set(
+                    newValue, forKey: Defaults.chatGPTModel
+                )
+            }
+        }
     }
 
     var fontSize: CGFloat {
@@ -551,6 +610,204 @@ final class ReaderStore {
         addHighlight(color: .amber, context: context)
         inspectorVisible = true
         inspectorTab = 1
+    }
+
+    // MARK: AI assistant
+
+    var selectedQuote: String {
+        if selectedBook?.format == .pdf,
+           let pdfQuote = activePDFView?.currentSelection?.string?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !pdfQuote.isEmpty {
+            return pdfQuote
+        }
+        return selectedTextQuote
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    func askAboutSelection() {
+        let quote = selectedQuote
+        guard !quote.isEmpty else {
+            showToast("Select text first")
+            return
+        }
+        aiContextQuote = quote
+        aiPanelVisible = true
+    }
+
+    func sendAIMessage() {
+        let question = aiDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !question.isEmpty else { return }
+        aiDraft = ""
+        aiMessages.append(.init(role: .user, text: question))
+        aiStatus = .working
+        let prompt = aiPrompt(for: question)
+        Task {
+            do {
+                let client = try makeAIClient()
+                let reply = try await client.respond(
+                    system: Self.aiSystemPrompt,
+                    prompt: prompt
+                )
+                aiMessages.append(.init(role: .assistant, text: reply))
+                aiStatus = .idle
+            } catch {
+                aiStatus = .failed(error.localizedDescription)
+                aiMessages.append(
+                    .init(role: .assistant, text: "⚠ \(error.localizedDescription)")
+                )
+            }
+        }
+    }
+
+    func summarizeSection() {
+        aiContextQuote = ""
+        aiPanelVisible = true
+        aiDraft = "Summarize this section into its key points."
+        sendAIMessage()
+    }
+
+    func quizFromHighlights(_ quotes: [String]) {
+        guard !quotes.isEmpty else {
+            showToast("No highlights yet")
+            return
+        }
+        aiContextQuote = ""
+        aiPanelVisible = true
+        aiDraft = ""
+        let joined = quotes.prefix(12).joined(separator: "\n- ")
+        aiMessages.append(
+            .init(
+                role: .user,
+                text: "Quiz me on my highlights from this book."
+            )
+        )
+        aiStatus = .working
+        let prompt = """
+            These are passages the reader highlighted in "\(selectedBook?.title ?? "this book")":
+            - \(joined)
+
+            Write 5 short review questions testing recall and understanding \
+            of these passages. Number them. Do not include answers.
+            """
+        Task {
+            do {
+                let client = try makeAIClient()
+                let reply = try await client.respond(
+                    system: Self.aiSystemPrompt,
+                    prompt: prompt
+                )
+                aiMessages.append(.init(role: .assistant, text: reply))
+                aiStatus = .idle
+            } catch {
+                aiStatus = .failed(error.localizedDescription)
+                aiMessages.append(
+                    .init(role: .assistant, text: "⚠ \(error.localizedDescription)")
+                )
+            }
+        }
+    }
+
+    func saveOpenAIKey(_ key: String) {
+        let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            KeychainStore.remove(account: "openai-api-key")
+        } else {
+            KeychainStore.set(trimmed, account: "openai-api-key")
+        }
+        openAIKeyPresent = !trimmed.isEmpty
+    }
+
+    func signInChatGPT() {
+        Task {
+            do {
+                _ = try await ChatGPTAuth.signIn()
+                chatGPTSignedIn = true
+                showToast("Signed in to ChatGPT")
+            } catch {
+                showToast(error.localizedDescription)
+            }
+        }
+    }
+
+    func signOutChatGPT() {
+        ChatGPTAuth.signOut()
+        chatGPTSignedIn = false
+    }
+
+    private static let aiSystemPrompt = """
+        You are a reading assistant inside Leaf Native, a macOS book reader. \
+        Answer concisely, refer to the quoted passage or section when \
+        relevant, and keep responses under 300 words unless asked for more.
+        """
+
+    private func makeAIClient() throws -> AIClient {
+        switch aiProvider {
+        case .openAI:
+            guard let key = KeychainStore.get(account: "openai-api-key") else {
+                throw AIError.requestFailed(
+                    "Add your OpenAI API key in Settings → AI."
+                )
+            }
+            return OpenAIClient(apiKey: key, model: openAIModel)
+        case .chatGPT:
+            guard let credentials = ChatGPTAuth.credentials else {
+                throw AIError.requestFailed(
+                    "Sign in to ChatGPT in Settings → AI."
+                )
+            }
+            return ChatGPTClient(
+                credentials: credentials,
+                model: chatGPTModel
+            )
+        case .appleIntelligence:
+            #if canImport(FoundationModels)
+            if #available(macOS 26.0, *),
+               AppleIntelligenceClient.isAvailable {
+                return AppleIntelligenceClient()
+            }
+            #endif
+            throw AIError.appleIntelligenceUnavailable
+        }
+    }
+
+    private func aiPrompt(for question: String) -> String {
+        var parts: [String] = []
+        if let book = selectedBook {
+            parts.append("Book: \"\(book.title)\" by \(book.author)")
+        }
+        let context = currentContextText()
+        if !context.isEmpty {
+            parts.append("Context the reader is looking at:\n\"\"\"\n\(context)\n\"\"\"")
+        }
+        parts.append("Question: \(question)")
+        return parts.joined(separator: "\n\n")
+    }
+
+    private func currentContextText() -> String {
+        if !aiContextQuote.isEmpty {
+            return String(aiContextQuote.prefix(4_000))
+        }
+        switch loadedContent {
+        case .attributedText(let attributed),
+             .epub(let attributed, _):
+            let string = attributed.string as NSString
+            let center =
+                selectedTextRange.location != NSNotFound
+                ? selectedTextRange.location : 0
+            let lower = max(0, center - 2_000)
+            let upper = min(string.length, center + 4_000)
+            guard upper > lower else { return "" }
+            return string.substring(
+                with: NSRange(location: lower, length: upper - lower)
+            )
+        case .pdf:
+            return String(
+                activePDFView?.currentPage?.string?.prefix(4_000) ?? ""
+            )
+        default:
+            return ""
+        }
     }
 
     private func pdfPageIndex(from locator: String) -> Int? {

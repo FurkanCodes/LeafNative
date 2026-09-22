@@ -4,6 +4,7 @@ import SwiftUI
 extension Notification.Name {
     static let leafOpenBook = Notification.Name("leaf.openBook")
     static let leafCheckUpdates = Notification.Name("leaf.checkUpdates")
+    static let leafAskAI = Notification.Name("leaf.askAI")
     static let leafHighlight = Notification.Name("leaf.highlight")
     static let leafAddNote = Notification.Name("leaf.addNote")
     static let leafPreviousPage = Notification.Name("leaf.previousPage")

@@ -57,6 +57,11 @@ struct RootView: View {
             store.checkForUpdates(userInitiated: true)
         }
         .onReceive(
+            NotificationCenter.default.publisher(for: .leafAskAI)
+        ) { _ in
+            store.askAboutSelection()
+        }
+        .onReceive(
             NotificationCenter.default.publisher(for: .leafOpenBook)
         ) { _ in
             store.importerVisible = true
@@ -81,6 +86,10 @@ struct RootView: View {
             NotificationCenter.default.publisher(for: .leafNextPage)
         ) { _ in
             store.nextPage()
+        }
+        .sheet(isPresented: $store.aiPanelVisible) {
+            AIChatView()
+                .environment(store)
         }
         .alert(
             "Update Available",
