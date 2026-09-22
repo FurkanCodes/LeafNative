@@ -130,7 +130,7 @@ struct AIMessage: Identifiable, Equatable {
 
 // MARK: - Clients
 
-protocol AIClient {
+protocol AIClient: Sendable {
     func respond(system: String?, prompt: String) async throws -> String
 }
 
@@ -212,7 +212,7 @@ struct AppleIntelligenceClient: AIClient {
 
 // MARK: - ChatGPT OAuth (experimental — borrows Codex CLI's public client)
 
-struct ChatGPTCredentials: Codable {
+struct ChatGPTCredentials: Codable, Sendable {
     var accessToken: String
     var refreshToken: String?
     var idToken: String?
