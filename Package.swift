@@ -21,6 +21,11 @@ let package = Package(
             name: "LeafNative",
             dependencies: ["ZIPFoundation"],
             path: "Sources/LeafNative"
+        ),
+        .testTarget(
+            name: "LeafNativeTests",
+            dependencies: ["LeafNative", "ZIPFoundation"],
+            path: "Tests/LeafNativeTests"
         )
     ],
     swiftLanguageModes: [.v6]

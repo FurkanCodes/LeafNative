@@ -81,7 +81,23 @@ private actor PDFHighlightPersistence {
             page.addAnnotation(annotation)
         }
 
-        return document.write(to: url)
+        return writeAtomically(document, to: url)
+    }
+
+    private func writeAtomically(
+        _ document: PDFDocument,
+        to url: URL
+    ) -> Bool {
+        let tempURL = url.deletingLastPathComponent()
+            .appendingPathComponent(".\(url.lastPathComponent).tmp.\(UUID().uuidString)")
+        guard document.write(to: tempURL) else { return false }
+        do {
+            _ = try FileManager.default.replaceItemAt(url, withItemAt: tempURL)
+            return true
+        } catch {
+            try? FileManager.default.removeItem(at: tempURL)
+            return false
+        }
     }
 
     func delete(
@@ -99,7 +115,7 @@ private actor PDFHighlightPersistence {
             quote: quote,
             from: page
         )
-        return document.write(to: url)
+        return writeAtomically(document, to: url)
     }
 }
 
