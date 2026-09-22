@@ -142,8 +142,8 @@ final class ReaderStore {
     var fontSize: CGFloat {
         get {
             access(keyPath: \.fontSize)
-            return UserDefaults.standard.object(forKey: Defaults.fontSize) as? Double
-                .map(CGFloat.init) ?? 18
+            return (UserDefaults.standard.object(forKey: Defaults.fontSize) as? Double)
+                .map { CGFloat($0) } ?? 18
         }
         set {
             withMutation(keyPath: \.fontSize) {
@@ -155,8 +155,8 @@ final class ReaderStore {
     var lineSpacing: CGFloat {
         get {
             access(keyPath: \.lineSpacing)
-            return UserDefaults.standard.object(forKey: Defaults.lineSpacing) as? Double
-                .map(CGFloat.init) ?? 8
+            return (UserDefaults.standard.object(forKey: Defaults.lineSpacing) as? Double)
+                .map { CGFloat($0) } ?? 8
         }
         set {
             withMutation(keyPath: \.lineSpacing) {
@@ -171,8 +171,8 @@ final class ReaderStore {
     var pageWidth: CGFloat {
         get {
             access(keyPath: \.pageWidth)
-            return UserDefaults.standard.object(forKey: Defaults.pageWidth) as? Double
-                .map(CGFloat.init) ?? 680
+            return (UserDefaults.standard.object(forKey: Defaults.pageWidth) as? Double)
+                .map { CGFloat($0) } ?? 680
         }
         set {
             withMutation(keyPath: \.pageWidth) {

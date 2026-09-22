@@ -137,8 +137,8 @@ struct RootView: View {
                 author: imported.author,
                 format: imported.format,
                 filePath: imported.localURL.path,
-                contentHash: imported.contentHash,
                 currentChapter: imported.chapter,
+                contentHash: imported.contentHash,
                 coverTone: tones[books.count % tones.count]
             )
             modelContext.insert(book)
