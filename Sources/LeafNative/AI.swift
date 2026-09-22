@@ -516,6 +516,13 @@ private final class LoopbackServer: @unchecked Sendable {
                 }
             }
             listener.start(queue: .global())
+            Task {
+                try? await Task.sleep(for: .seconds(300))
+                if once.claim() {
+                    listener.cancel()
+                    continuation.resume(throwing: AIError.authCancelled)
+                }
+            }
         }
     }
 }
