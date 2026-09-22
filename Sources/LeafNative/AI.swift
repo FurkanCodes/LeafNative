@@ -493,7 +493,10 @@ private final class LoopbackServer {
                         )
                         return
                     }
-                    guard url.queryItems?
+                    guard URLComponents(
+                        url: url,
+                        resolvingAgainstBaseURL: false
+                    )?.queryItems?
                         .first(where: { $0.name == "state" })?.value
                         == expectedState
                     else {
