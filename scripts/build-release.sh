@@ -15,6 +15,24 @@ rm -rf "$STAGING"
 mkdir -p "$STAGING"
 cp -R "$APP" "$STAGING/"
 ln -s /Applications "$STAGING/Applications"
+cat > "$STAGING/READ ME FIRST.txt" <<'EOF'
+Leaf Native - First Launch
+
+This build is ad-hoc signed (not Apple-notarized yet), so macOS
+Gatekeeper blocks the first launch.
+
+Do ONE of the following after dragging Leaf Native into Applications:
+
+  1. Right-click "Leaf Native" in Applications and choose Open,
+     then click Open again in the dialog.
+
+  2. Or open Terminal and run:
+
+       xattr -dr com.apple.quarantine "/Applications/Leaf Native.app"
+
+Either step only needs to be done once. After that the app opens
+normally and can update itself from the app menu.
+EOF
 
 rm -f "$DMG" "$ZIP" "$CHECKSUMS"
 hdiutil create \

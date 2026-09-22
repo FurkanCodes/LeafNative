@@ -107,6 +107,13 @@ struct ReaderScreen: View {
                 }
 
                 Button {
+                    store.aiPanelVisible = true
+                } label: {
+                    Label("Ask AI", systemImage: "sparkles")
+                }
+                .help("Ask AI about this book")
+
+                Button {
                     store.appearanceVisible.toggle()
                 } label: {
                     Label("Reading Appearance", systemImage: "textformat.size")
@@ -526,6 +533,7 @@ struct AnnotationInspectorRow: View {
 
 struct SettingsView: View {
     @Environment(ReaderStore.self) private var store
+    @State private var openAIKeyDraft = ""
 
     var body: some View {
         @Bindable var store = store
@@ -544,6 +552,48 @@ struct SettingsView: View {
             Section("Library") {
                 LabeledContent("Storage", value: "On this Mac")
                 LabeledContent("Publication Scripts", value: "Not executed")
+            }
+            Section("AI Assistant") {
+                Picker("Provider", selection: $store.aiProvider) {
+                    ForEach(AIProvider.allCases) { provider in
+                        Text(provider.displayName).tag(provider)
+                    }
+                }
+                Text(store.aiProvider.detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                switch store.aiProvider {
+                case .openAI:
+                    SecureField(
+                        store.openAIKeyPresent
+                            ? "API key saved (paste to replace)"
+                            : "OpenAI API key (sk-...)",
+                        text: $openAIKeyDraft
+                    )
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit {
+                        store.saveOpenAIKey(openAIKeyDraft)
+                        openAIKeyDraft = ""
+                    }
+                    TextField("Model", text: $store.openAIModel)
+                        .textFieldStyle(.roundedBorder)
+                case .chatGPT:
+                    if store.chatGPTSignedIn {
+                        LabeledContent("Status", value: "Signed in")
+                        Button("Sign Out") {
+                            store.signOutChatGPT()
+                        }
+                    } else {
+                        Button("Sign in with ChatGPT…") {
+                            store.signInChatGPT()
+                        }
+                    }
+                    TextField("Model", text: $store.chatGPTModel)
+                        .textFieldStyle(.roundedBorder)
+                case .appleIntelligence:
+                    EmptyView()
+                }
             }
             Section("Software Update") {
                 LabeledContent(

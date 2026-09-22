@@ -415,7 +415,8 @@ private enum LeafAnnotationContextMenu {
         into menu: NSMenu,
         target: AnyObject,
         highlightAction: Selector,
-        noteAction: Selector
+        noteAction: Selector,
+        askAIAction: Selector
     ) {
         let highlightItem = NSMenuItem(
             title: "Highlight",
@@ -443,6 +444,14 @@ private enum LeafAnnotationContextMenu {
 
         highlightItem.submenu = highlightMenu
         menu.insertItem(.separator(), at: 0)
+
+        let askItem = NSMenuItem(
+            title: "Ask AI About This",
+            action: askAIAction,
+            keyEquivalent: ""
+        )
+        askItem.target = target
+        menu.insertItem(askItem, at: 0)
 
         let noteItem = NSMenuItem(
             title: "Highlight with Note",
@@ -477,7 +486,8 @@ final class LeafTextView: NSTextView {
                 into: menu,
                 target: self,
                 highlightAction: #selector(addLeafHighlight(_:)),
-                noteAction: #selector(addLeafNote)
+                noteAction: #selector(addLeafNote),
+                askAIAction: #selector(askAI)
             )
         }
         return menu
@@ -492,6 +502,10 @@ final class LeafTextView: NSTextView {
 
     @objc private func addLeafNote() {
         NotificationCenter.default.post(name: .leafAddNote, object: nil)
+    }
+
+    @objc private func askAI() {
+        NotificationCenter.default.post(name: .leafAskAI, object: nil)
     }
 }
 
@@ -509,7 +523,8 @@ final class LeafPDFView: PDFView {
             into: menu,
             target: self,
             highlightAction: #selector(addLeafHighlight(_:)),
-            noteAction: #selector(addLeafNote)
+            noteAction: #selector(addLeafNote),
+            askAIAction: #selector(askAI)
         )
         return menu
     }
@@ -523,6 +538,10 @@ final class LeafPDFView: PDFView {
 
     @objc private func addLeafNote() {
         NotificationCenter.default.post(name: .leafAddNote, object: nil)
+    }
+
+    @objc private func askAI() {
+        NotificationCenter.default.post(name: .leafAskAI, object: nil)
     }
 }
 
