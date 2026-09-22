@@ -333,7 +333,14 @@ final class ReaderStore {
         updateStatus = .checking
         Task {
             do {
-                let release = try await UpdateChecker.latestRelease()
+                guard let release = try await UpdateChecker.latestRelease() else {
+                    availableUpdate = nil
+                    updateStatus = .upToDate
+                    if userInitiated {
+                        showToast("Leaf is up to date")
+                    }
+                    return
+                }
                 if UpdateChecker.isNewer(
                     release.version,
                     than: UpdateChecker.currentVersion

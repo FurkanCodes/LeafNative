@@ -44,7 +44,7 @@ enum UpdateChecker {
         ) as? String ?? "0.0.0"
     }
 
-    static func latestRelease() async throws -> GitHubRelease {
+    static func latestRelease() async throws -> GitHubRelease? {
         var request = URLRequest(
             url: URL(
                 string: "https://api.github.com/repos/FurkanCodes/LeafNative/releases/latest"
@@ -55,7 +55,13 @@ enum UpdateChecker {
             forHTTPHeaderField: "Accept"
         )
         let (data, response) = try await URLSession.shared.data(for: request)
-        guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+        guard let status = (response as? HTTPURLResponse)?.statusCode else {
+            throw UpdateError.checkFailed
+        }
+        if status == 404 {
+            return nil
+        }
+        guard status == 200 else {
             throw UpdateError.checkFailed
         }
 
