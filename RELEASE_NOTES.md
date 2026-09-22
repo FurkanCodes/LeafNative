@@ -19,4 +19,19 @@ The second release of Leaf Native: in-app auto-updates, a proper EPUB reader cor
 - **ZIP** — portable app bundle
 - **SHA256SUMS.txt** — checksums for both downloads
 
-Leaf Native requires macOS 15 or later. This build is ad-hoc signed but not yet Apple-notarized; on first launch, right-click the app and choose **Open** if Gatekeeper asks.
+Leaf Native requires macOS 15 or later.
+
+## First Launch (important)
+
+This build is ad-hoc signed — not Apple-notarized yet — so **macOS Gatekeeper will block the first launch**. It only takes one step to fix:
+
+1. Drag **Leaf Native** into **Applications**
+2. Then **either**:
+   - Right-click the app in Applications → **Open** → click **Open** again, **or**
+   - Run in Terminal:
+
+     ```
+     xattr -dr com.apple.quarantine "/Applications/Leaf Native.app"
+     ```
+
+One-time fix — the app opens normally afterwards and updates itself via the app menu → **Check for Updates…** (the built-in updater strips quarantine for you on each update).
