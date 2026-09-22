@@ -22,6 +22,7 @@ struct LeafNativeApp: App {
         .modelContainer(for: [BookRecord.self, AnnotationRecord.self])
         .defaultSize(width: 1440, height: 920)
         .windowToolbarStyle(.unified(showsTitle: false))
+        .handlesExternalEvents(matching: [])
         .commands {
             LeafCommands()
         }

@@ -89,6 +89,8 @@ final class BookRecord {
     var lastOpened: Date
     var currentChapter: String
     var lastLocator: String = ""
+    var bookmarkLocator: String = ""
+    var contentHash: String = ""
     var coverToneRaw: String
     var isFavorite: Bool
     var isBookmarked: Bool
@@ -103,6 +105,8 @@ final class BookRecord {
         lastOpened: Date = .now,
         currentChapter: String = "Start reading",
         lastLocator: String = "",
+        bookmarkLocator: String = "",
+        contentHash: String = "",
         coverTone: CoverTone = .ochre,
         isFavorite: Bool = false,
         isBookmarked: Bool = false
@@ -116,6 +120,8 @@ final class BookRecord {
         self.lastOpened = lastOpened
         self.currentChapter = currentChapter
         self.lastLocator = lastLocator
+        self.bookmarkLocator = bookmarkLocator
+        self.contentHash = contentHash
         self.coverToneRaw = coverTone.rawValue
         self.isFavorite = isFavorite
         self.isBookmarked = isBookmarked
