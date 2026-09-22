@@ -1,3 +1,4 @@
+import AppKit
 import SwiftData
 import SwiftUI
 
@@ -543,6 +544,51 @@ struct SettingsView: View {
             Section("Library") {
                 LabeledContent("Storage", value: "On this Mac")
                 LabeledContent("Publication Scripts", value: "Not executed")
+            }
+            Section("Software Update") {
+                LabeledContent(
+                    "Current Version",
+                    value: UpdateChecker.currentVersion
+                )
+                if let release = store.availableUpdate {
+                    LabeledContent(
+                        "Latest Release",
+                        value: "v\(release.version)"
+                    )
+                }
+                HStack(spacing: 12) {
+                    switch store.updateStatus {
+                    case .checking:
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("Checking…")
+                    case .available:
+                        Button("Download & Install") {
+                            store.installAvailableUpdate()
+                        }
+                        if let url = store.availableUpdate?.htmlURL {
+                            Button("View Release") {
+                                NSWorkspace.shared.open(url)
+                            }
+                        }
+                    case .downloading:
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("Downloading update…")
+                    case .installing:
+                        Text("Installing — Leaf will relaunch.")
+                    case .upToDate:
+                        Text("You're up to date.")
+                        Button("Check Again") {
+                            store.checkForUpdates(userInitiated: true)
+                        }
+                    case .idle:
+                        Button("Check for Updates…") {
+                            store.checkForUpdates(userInitiated: true)
+                        }
+                    }
+                }
+                .font(.caption)
             }
         }
         .formStyle(.grouped)

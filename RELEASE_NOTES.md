@@ -1,17 +1,17 @@
-# Leaf Native 1.0.0
+# Leaf Native 1.1.0
 
-The first public release of Leaf Native: a focused, genuinely native macOS reading and study app.
+The second release of Leaf Native: in-app auto-updates, a proper EPUB reader core, and polish across the library.
 
 ## Highlights
 
-- Native PDF, EPUB, and document reading with a local-first library
-- Fast highlighting in Amber, Sage, and Rose
-- Context-menu highlight actions for selected text
-- Click any saved highlight to return to its passage
-- Add, edit, and delete highlights and notes from the Notebook
-- Hideable, modern Notebook pane that matches the library sidebar
-- PDF outline and EPUB contents navigation
-- Bookmarks, search, reading progress, appearance controls, and keyboard shortcuts
+- **Auto-update** — Leaf now checks GitHub Releases on launch and from the app menu; download and install updates without leaving the app (Settings → Software Update)
+- **Real EPUB support** — chapters follow the spine's reading order and the sidebar shows the book's own table of contents (nav/NCX)
+- **Resume where you left off** — reading position and page now persist for every format, not just PDFs
+- **Position bookmarks** — bookmark a spot and jump back to it from the reader toolbar
+- **Faster loading** — large books parse off the main thread, no more UI freezes
+- **Finder "Open With"** — open books in Leaf directly from Finder
+- **Library sorting** — sort by Last Opened, Title, or Author; appearance and sort choices now persist across launches
+- **Safer highlights** — PDF edits are written atomically so a crash can't corrupt a book
 
 ## Downloads
 

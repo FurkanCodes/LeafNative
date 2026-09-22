@@ -3,6 +3,7 @@ import SwiftUI
 
 extension Notification.Name {
     static let leafOpenBook = Notification.Name("leaf.openBook")
+    static let leafCheckUpdates = Notification.Name("leaf.checkUpdates")
     static let leafHighlight = Notification.Name("leaf.highlight")
     static let leafAddNote = Notification.Name("leaf.addNote")
     static let leafPreviousPage = Notification.Name("leaf.previousPage")
@@ -42,6 +43,15 @@ struct LeafCommands: Commands {
                 NotificationCenter.default.post(name: .leafOpenBook, object: nil)
             }
             .keyboardShortcut("o")
+        }
+
+        CommandGroup(after: .appInfo) {
+            Button("Check for Updates…") {
+                NotificationCenter.default.post(
+                    name: .leafCheckUpdates,
+                    object: nil
+                )
+            }
         }
 
         CommandMenu("Reading") {

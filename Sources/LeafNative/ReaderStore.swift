@@ -146,6 +146,9 @@ final class ReaderStore {
     var activePDFView: PDFView?
     var locationNavigation: LocationNavigation?
     var toast: String?
+    var updateStatus: UpdateStatus = .idle
+    var availableUpdate: GitHubRelease?
+    var updateAlertVisible = false
 
     private enum Defaults {
         static let fontSize = "leaf.appearance.fontSize"
@@ -323,6 +326,59 @@ final class ReaderStore {
             book.bookmarkLocator = ""
         }
         showToast(book.isBookmarked ? "Page bookmarked" : "Bookmark removed")
+    }
+
+    func checkForUpdates(userInitiated: Bool) {
+        guard updateStatus != .checking else { return }
+        updateStatus = .checking
+        Task {
+            do {
+                guard let release = try await UpdateChecker.latestRelease() else {
+                    availableUpdate = nil
+                    updateStatus = .upToDate
+                    if userInitiated {
+                        showToast("Leaf is up to date")
+                    }
+                    return
+                }
+                if UpdateChecker.isNewer(
+                    release.version,
+                    than: UpdateChecker.currentVersion
+                ) {
+                    availableUpdate = release
+                    updateStatus = .available
+                    updateAlertVisible = true
+                } else {
+                    availableUpdate = nil
+                    updateStatus = .upToDate
+                    if userInitiated {
+                        showToast("Leaf is up to date")
+                    }
+                }
+            } catch {
+                updateStatus = .idle
+                if userInitiated {
+                    showToast(error.localizedDescription)
+                }
+            }
+        }
+    }
+
+    func installAvailableUpdate() {
+        guard let release = availableUpdate,
+              updateStatus == .available
+        else { return }
+        updateAlertVisible = false
+        updateStatus = .downloading
+        Task {
+            do {
+                updateStatus = .installing
+                try await UpdateChecker.downloadAndInstall(release)
+            } catch {
+                updateStatus = .available
+                showToast(error.localizedDescription)
+            }
+        }
     }
 
     private static func startLocator(for format: ReaderFormat) -> String {
