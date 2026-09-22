@@ -429,7 +429,7 @@ enum ChatGPTAuth {
 }
 
 // One-shot localhost listener for the OAuth redirect.
-private final class LoopbackServer {
+private final class LoopbackServer: @unchecked Sendable {
     private var listener: NWListener?
 
     private final class Once: @unchecked Sendable {
