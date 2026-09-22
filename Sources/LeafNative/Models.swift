@@ -199,7 +199,7 @@ struct BookContentEntry: Identifiable, Equatable, Sendable {
     }
 }
 
-enum LoadedBookContent: Sendable {
+enum LoadedBookContent: @unchecked Sendable {
     case attributedText(NSAttributedString)
     case epub(NSAttributedString, contents: [BookContentEntry])
     case pdf(URL)
