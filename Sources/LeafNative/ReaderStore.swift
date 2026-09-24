@@ -150,6 +150,8 @@ final class ReaderStore {
     /// Books whose DOI lookup finished without a match this session.
     var settledCitationLookups: Set<UUID> = []
     var doiPromptBook: BookRecord?
+    /// The notebook entry whose note editor is open.
+    var editingAnnotationID: UUID?
     var doiPromptText = ""
     var locationNavigation: LocationNavigation?
     var toast: String?
@@ -517,11 +519,23 @@ final class ReaderStore {
         }
     }
 
+    var hasTextSelection: Bool {
+        if selectedBook?.format == .pdf {
+            return !(activePDFView?.currentSelection?.string?
+                .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+        }
+        return selectedTextRange.location != NSNotFound
+            && selectedTextRange.length > 0
+            && !selectedTextQuote.isEmpty
+    }
+
+    @discardableResult
     func addHighlight(
         color: HighlightColor,
-        context: ModelContext
-    ) {
-        guard let book = selectedBook else { return }
+        context: ModelContext,
+        announce: Bool = true
+    ) -> AnnotationRecord? {
+        guard let book = selectedBook else { return nil }
 
         if book.format == .pdf, let pdfView = activePDFView,
            let selection = pdfView.currentSelection,
@@ -578,8 +592,8 @@ final class ReaderStore {
                 }
             }
             pdfView.clearSelection()
-            showToast("Highlight saved")
-            return
+            if announce { showToast("Highlight saved") }
+            return record
         }
 
         guard selectedTextRange.location != NSNotFound,
@@ -587,7 +601,7 @@ final class ReaderStore {
               !selectedTextQuote.isEmpty
         else {
             showToast("Select text first")
-            return
+            return nil
         }
 
         let record = AnnotationRecord(
@@ -600,7 +614,8 @@ final class ReaderStore {
         context.insert(record)
         selectedTextRange = NSRange(location: NSNotFound, length: 0)
         selectedTextQuote = ""
-        showToast("Highlight saved")
+        if announce { showToast("Highlight saved") }
+        return record
     }
 
     func deleteHighlight(
@@ -610,8 +625,11 @@ final class ReaderStore {
         let annotationID = annotation.id
         let quote = annotation.quote
         let locator = annotation.locator
+        let isPageNote = quote.isEmpty
+        if editingAnnotationID == annotationID { editingAnnotationID = nil }
 
-        if let book = selectedBook,
+        if !isPageNote,
+           let book = selectedBook,
            book.id == annotation.bookID,
            book.format == .pdf,
            let pageIndex = pdfPageIndex(from: locator) {
@@ -639,13 +657,53 @@ final class ReaderStore {
         }
 
         context.delete(annotation)
-        showToast("Highlight deleted")
+        showToast(isPageNote ? "Note deleted" : "Highlight deleted")
     }
 
+    /// Highlights the selection and opens its note editor, or starts a note
+    /// about the current page when nothing is selected.
     func addNote(context: ModelContext) {
-        addHighlight(color: .amber, context: context)
+        if hasTextSelection {
+            if let record = addHighlight(color: .amber, context: context, announce: false) {
+                beginEditingNote(record)
+            }
+        } else {
+            addPageNote(context: context)
+        }
+    }
+
+    func addPageNote(context: ModelContext) {
+        guard let book = selectedBook else { return }
+        let locator: String
+        if book.format == .pdf,
+           let view = activePDFView, let document = view.document, let page = view.currentPage {
+            locator = "pdf:\(document.index(for: page))"
+        } else if let offset = BookContentEntry(id: "", title: "", locator: book.lastLocator, level: 0).textOffset {
+            locator = "text:\(offset):0"
+        } else {
+            locator = book.format == .pdf ? "pdf:0" : "text:0:0"
+        }
+        let record = AnnotationRecord(
+            bookID: book.id, quote: "", locator: locator, chapter: book.currentChapter
+        )
+        context.insert(record)
+        beginEditingNote(record)
+    }
+
+    func beginEditingNote(_ annotation: AnnotationRecord) {
+        companionPane = .notebook
         inspectorVisible = true
-        inspectorTab = 1
+        if inspectorTab == 1, annotation.note.isEmpty { inspectorTab = 0 }
+        editingAnnotationID = annotation.id
+    }
+
+    /// Closes the editor. A page note left empty is discarded.
+    func finishEditingNote(_ annotation: AnnotationRecord, context: ModelContext) {
+        if editingAnnotationID == annotation.id { editingAnnotationID = nil }
+        annotation.note = annotation.note.trimmingCharacters(in: .whitespacesAndNewlines)
+        if annotation.quote.isEmpty, annotation.note.isEmpty {
+            context.delete(annotation)
+        }
     }
 
     // MARK: AI assistant

@@ -99,37 +99,7 @@ struct RootView: View {
         ) { _ in
             store.nextPage()
         }
-        .onReceive(
-            NotificationCenter.default.publisher(for: .leafExportNotes)
-        ) { _ in
-            if let book = store.selectedBook {
-                store.exportNotes(for: book, context: modelContext)
-            } else {
-                store.showToast("Open a book to export its notes")
-            }
-        }
-        .onReceive(
-            NotificationCenter.default.publisher(for: .leafExportAllNotes)
-        ) { _ in
-            store.exportLibraryNotes(books: books, context: modelContext)
-        }
-        .alert(
-            "Set DOI",
-            isPresented: Binding(
-                get: { store.doiPromptBook != nil },
-                set: { if !$0 { store.doiPromptBook = nil } }
-            )
-        ) {
-            TextField("10.1000/example", text: $store.doiPromptText)
-            Button("Save") {
-                if let book = store.doiPromptBook {
-                    store.setDOI(store.doiPromptText, for: book)
-                }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Leaf looks up the DOI on Crossref to build accurate BibTeX and APA references. Leave it empty to detect it automatically.")
-        }
+        .modifier(NotebookCommandHandlers(books: books, annotations: annotations))
         .alert(
             "Update Available",
             isPresented: $store.updateAlertVisible
@@ -247,10 +217,12 @@ struct RootView: View {
         modelContext.insert(
             AnnotationRecord(
                 bookID: sampleID,
-                quote: "Some lines need to remain open for a while. They gather meaning from what follows.",
+                quote: "Some lines need to remain open for a while. They gather meaning from what follows",
                 note: "A reminder to postpone summarizing until the end of a section.",
                 color: .amber,
-                locator: "text:493:83",
+                locator: Self.sampleLocator(
+                    "Some lines need to remain open for a while. They gather meaning from what follows"
+                ),
                 chapter: "A Practice of Noticing",
                 createdAt: .now.addingTimeInterval(-480)
             )
@@ -258,13 +230,80 @@ struct RootView: View {
         modelContext.insert(
             AnnotationRecord(
                 bookID: sampleID,
-                quote: "The strongest notes are not summaries of what the author has said. They are records of contact.",
+                quote: "The strongest notes are not summaries of what the author has said. They are records of contact",
                 color: .sage,
-                locator: "text:1263:102",
+                locator: Self.sampleLocator(
+                    "The strongest notes are not summaries of what the author has said. They are records of contact"
+                ),
                 chapter: "A Practice of Noticing",
                 createdAt: .now.addingTimeInterval(-120)
             )
         )
         store.selectedBook = sample
+    }
+
+    private static func sampleLocator(_ quote: String) -> String {
+        let range = (ContentLoader.sampleChapter as NSString).range(of: quote)
+        return range.location == NSNotFound ? "text:0:0" : "text:\(range.location):\(range.length)"
+    }
+}
+
+/// Notebook, citation, and export commands arriving from menus and reader views.
+private struct NotebookCommandHandlers: ViewModifier {
+    @Environment(ReaderStore.self) private var store
+    @Environment(\.modelContext) private var modelContext
+    let books: [BookRecord]
+    let annotations: [AnnotationRecord]
+
+    func body(content: Content) -> some View {
+        @Bindable var store = store
+        content
+            .onReceive(
+                NotificationCenter.default.publisher(for: .leafEditNote)
+            ) { notification in
+                if let id = notification.object as? UUID,
+                   let annotation = annotations.first(where: { $0.id == id }) {
+                    store.beginEditingNote(annotation)
+                }
+            }
+            .onReceive(
+                NotificationCenter.default.publisher(for: .leafRemoveHighlight)
+            ) { notification in
+                if let id = notification.object as? UUID,
+                   let annotation = annotations.first(where: { $0.id == id }) {
+                    store.deleteHighlight(annotation, context: modelContext)
+                }
+            }
+            .onReceive(
+                NotificationCenter.default.publisher(for: .leafExportNotes)
+            ) { _ in
+                if let book = store.selectedBook {
+                    store.exportNotes(for: book, context: modelContext)
+                } else {
+                    store.showToast("Open a book to export its notes")
+                }
+            }
+            .onReceive(
+                NotificationCenter.default.publisher(for: .leafExportAllNotes)
+            ) { _ in
+                store.exportLibraryNotes(books: books, context: modelContext)
+            }
+            .alert(
+                "Set DOI",
+                isPresented: Binding(
+                    get: { store.doiPromptBook != nil },
+                    set: { if !$0 { store.doiPromptBook = nil } }
+                )
+            ) {
+                TextField("10.1000/example", text: $store.doiPromptText)
+                Button("Save") {
+                    if let book = store.doiPromptBook {
+                        store.setDOI(store.doiPromptText, for: book)
+                    }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Leaf looks up the DOI on Crossref to build accurate BibTeX and APA references. Leave it empty to detect it automatically.")
+            }
     }
 }

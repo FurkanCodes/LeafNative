@@ -183,7 +183,7 @@ struct AIChatView: View {
                     Button("Summarize this section") { store.summarizeSection() }
                     Button("Quiz me on my highlights") {
                         store.quizFromHighlights(
-                            annotations.filter { $0.bookID == book?.id }.map(\.quote)
+                            annotations.filter { $0.bookID == book?.id && !$0.quote.isEmpty }.map(\.quote)
                         )
                     }
                     Button("Find related papers") {

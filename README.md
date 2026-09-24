@@ -30,6 +30,7 @@ Leaf keeps the book at the center. Its three-pane workspace gives the library, r
 - **Research companion** — local conversations per book, streamed Markdown answers, passage retrieval, and scholarly paper discovery with DOI metadata checked against Crossref.
 - **Fast, deliberate highlighting** — select text, choose Amber, Sage, or Rose, and keep reading.
 - **Highlights that lead somewhere** — click a saved highlight to jump directly back to its passage.
+- **A notebook that stays out of the way** — press `⇧⌘N` to write a note on the selection or the current page, right-click a highlight to edit its note, and see everything in reading order.
 - **Notes that leave with you** — export highlights and notes as Markdown with YAML front matter and Pandoc citations (`[@key, p. 12]`), or export the whole library with a shared BibTeX file, ready for Obsidian, Zotero, or LaTeX.
 - **Citations from the DOI** — Leaf finds a paper's DOI, confirms it against Crossref, and copies APA references, BibTeX, or a quote with its in-text citation.
 - **Real PDF annotations** — PDF highlights are written into the document and can be removed from Leaf.
@@ -54,7 +55,7 @@ DRM-protected Kindle and EPUB files require authorization from their vendor and 
 | Import a book | `⌘O` |
 | Find in book | `⌘F` |
 | Highlight selection | `⇧⌘H` |
-| Highlight with a note | `⇧⌘N` |
+| Add a note (to the selection, or to the current page) | `⇧⌘N` |
 | Export notes as Markdown | `⇧⌘E` |
 | Previous / next page | `←` / `→` |
 
