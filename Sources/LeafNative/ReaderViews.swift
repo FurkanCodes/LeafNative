@@ -62,25 +62,6 @@ struct ReaderScreen: View {
 
             ToolbarItemGroup(placement: .primaryAction) {
                 Menu {
-                    ForEach(HighlightColor.allCases, id: \.self) { color in
-                        Button {
-                            store.addHighlight(color: color, context: modelContext)
-                        } label: {
-                            Label(color.displayName, systemImage: "circle.fill")
-                        }
-                    }
-                    Divider()
-                    Button {
-                        store.addNote(context: modelContext)
-                    } label: {
-                        Label("Highlight with Note", systemImage: "note.text.badge.plus")
-                    }
-                } label: {
-                    Label("Highlight", systemImage: "highlighter")
-                }
-                .help("Highlight Selection (⇧⌘H)")
-
-                Menu {
                     Button {
                         store.toggleBookmark(on: book)
                     } label: {
@@ -105,20 +86,6 @@ struct ReaderScreen: View {
                         systemImage: book.isBookmarked ? "bookmark.fill" : "bookmark"
                     )
                 }
-
-                Menu {
-                    CiteMenuItems(book: book)
-                } label: {
-                    Label("Export & Cite", systemImage: "square.and.arrow.up")
-                }
-                .help("Export notes or copy a citation")
-
-                Button {
-                    store.openAICompanion()
-                } label: {
-                    Label("Ask AI", systemImage: "sparkles")
-                }
-                .help("Ask AI about this book")
 
                 Button {
                     store.appearanceVisible.toggle()
@@ -184,12 +151,18 @@ struct ReaderScreen: View {
         }
     }
 
+    private var footerSection: String {
+        if let entry = store.contents.first(where: { $0.id == store.activeContentEntryID }) {
+            return SectionTitle.display(entry.title)
+        }
+        let chapter = book.currentChapter.components(separatedBy: " · Page ").first ?? ""
+        return NotesMarkdown.placeholderChapters.contains(chapter) ? book.format.displayName : chapter
+    }
+
     private var readerFooter: some View {
         HStack(spacing: 12) {
-            Label(
-                book.format == .sample ? "Chapter 4 of 8" : book.format.displayName,
-                systemImage: "list.bullet.indent"
-            )
+            Label(footerSection, systemImage: "list.bullet.indent")
+                .lineLimit(1)
             .font(.caption2)
             .foregroundStyle(.secondary)
 

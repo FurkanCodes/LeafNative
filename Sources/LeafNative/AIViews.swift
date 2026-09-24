@@ -5,24 +5,64 @@ import SwiftUI
 
 struct CompanionInspector: View {
     @Environment(ReaderStore.self) private var store
+    @Environment(\.modelContext) private var modelContext
     let annotations: [AnnotationRecord]
 
     var body: some View {
         @Bindable var store = store
         VStack(spacing: 0) {
-            Picker("Side pane", selection: $store.companionPane) {
-                Text("AI Companion").tag(ReaderStore.CompanionPane.ai)
-                Text("Notebook").tag(ReaderStore.CompanionPane.notebook)
+            HStack(spacing: 4) {
+                Picker("Side pane", selection: $store.companionPane) {
+                    Text("Notebook").tag(ReaderStore.CompanionPane.notebook)
+                    Text("Ask AI").tag(ReaderStore.CompanionPane.ai)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
+                Spacer(minLength: 8)
+                if store.companionPane == .notebook {
+                    notebookActions
+                }
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .padding(12)
-            Divider()
+            .padding(.leading, 14)
+            .padding(.trailing, 10)
+            .frame(height: 48)
+
             if store.companionPane == .ai {
+                Divider()
                 AIChatView().environment(store)
             } else {
                 NotebookInspector(annotations: annotations)
             }
+        }
+        .background(LeafPalette.notebook)
+    }
+
+    @ViewBuilder
+    private var notebookActions: some View {
+        Button {
+            store.addPageNote(context: modelContext)
+        } label: {
+            Label("New Note", systemImage: "square.and.pencil")
+                .labelStyle(.iconOnly)
+                .frame(width: 26, height: 24)
+        }
+        .buttonStyle(.borderless)
+        .help("New Note on This Page (⇧⌘N)")
+        .disabled(store.selectedBook == nil)
+
+        if let book = store.selectedBook {
+            Menu {
+                CiteMenuItems(book: book)
+            } label: {
+                Label("Export & Cite", systemImage: "square.and.arrow.up")
+                    .labelStyle(.iconOnly)
+                    .frame(width: 26, height: 24)
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("Export Notes (⇧⌘E) or Copy a Citation")
         }
     }
 }

@@ -150,7 +150,7 @@ enum ContentLoader {
             guard range.location != NSNotFound else { return nil }
             return BookContentEntry(
                 id: "sample:\(index)",
-                title: heading.0.capitalized,
+                title: SectionTitle.display(heading.0),
                 locator: "text:\(range.location):\(range.length)",
                 level: heading.1
             )

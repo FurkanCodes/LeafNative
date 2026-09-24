@@ -100,6 +100,11 @@ struct LeafCommands: Commands {
                 NotificationCenter.default.post(name: .leafAddNote, object: nil)
             }
             .keyboardShortcut("n", modifiers: [.command, .shift])
+
+            Button("Ask AI About Selection") {
+                NotificationCenter.default.post(name: .leafAskAI, object: nil)
+            }
+            .keyboardShortcut("a", modifiers: [.command, .shift])
         }
     }
 }

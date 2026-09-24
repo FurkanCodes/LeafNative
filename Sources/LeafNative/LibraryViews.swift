@@ -4,99 +4,40 @@ struct SidebarView: View {
     @Environment(ReaderStore.self) private var store
     let books: [BookRecord]
     let annotationCount: Int
+    /// Highlights and notes in the book being read, counted per section.
+    let bookAnnotations: [AnnotationRecord]
+    @State private var contentsExpanded = true
 
     var body: some View {
         List {
             Section {
-                sidebarRow(
-                    .library,
-                    title: "Library",
-                    symbol: "books.vertical"
-                )
-                sidebarRow(
-                    .reader,
-                    title: "Now Reading",
-                    symbol: "book"
-                )
-                Button {
-                    store.destination = .reader
-                    store.openAICompanion()
-                } label: {
-                    Label("AI Companion", systemImage: "sparkles")
-                }
-                .buttonStyle(.plain)
+                sidebarRow(.library, title: "Library", symbol: "books.vertical")
                 sidebarRow(
                     .highlights,
-                    title: "Highlights",
+                    title: "Highlights & Notes",
                     symbol: "highlighter",
                     count: annotationCount
                 )
-                sidebarRow(
-                    .favorites,
-                    title: "Favorites",
-                    symbol: "heart"
-                )
+                sidebarRow(.favorites, title: "Favorites", symbol: "heart")
             }
 
             if let book = store.selectedBook ?? books.first {
-                Section("Current Book") {
-                    Button {
-                        store.select(book)
-                    } label: {
-                        HStack(spacing: 10) {
-                            BookCoverView(book: book, size: .mini)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(book.title)
-                                    .font(.caption.weight(.semibold))
-                                    .lineLimit(1)
-                                Text(book.author)
-                                    .font(.caption2)
-                                    .foregroundStyle(.tertiary)
-                                    .lineLimit(1)
-                            }
-                        }
-                        .padding(.vertical, 4)
-                    }
-                    .buttonStyle(.plain)
+                Section("Now Reading") {
+                    nowReading(book)
                 }
 
-                Section("Contents") {
+                Section(isExpanded: $contentsExpanded) {
                     if store.contents.isEmpty {
                         Text("No document outline")
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
                     } else {
-                        ForEach(store.contents) { entry in
-                            Button {
-                                store.navigate(to: entry)
-                            } label: {
-                                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                                    Text(entry.title)
-                                        .font(.caption)
-                                        .lineLimit(2)
-                                    Spacer(minLength: 0)
-                                    if let pageIndex = entry.pdfPageIndex {
-                                        Text(pageIndex + 1, format: .number)
-                                            .font(.caption2.monospacedDigit())
-                                            .foregroundStyle(.tertiary)
-                                    }
-                                }
-                                .padding(.leading, CGFloat(min(entry.level, 3)) * 10)
-                                .foregroundStyle(
-                                    store.activeContentEntryID == entry.id
-                                        ? .primary
-                                        : .secondary
-                                )
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            .listRowBackground(
-                                store.activeContentEntryID == entry.id
-                                    ? LeafPalette.amber.opacity(0.10)
-                                    : Color.clear
-                            )
+                        ForEach(Array(store.contents.enumerated()), id: \.element.id) { index, entry in
+                            contentsRow(entry, index: index)
                         }
                     }
+                } header: {
+                    Text("Contents")
                 }
             }
         }
@@ -107,48 +48,165 @@ struct SidebarView: View {
                 Button {
                     store.importerVisible = true
                 } label: {
-                    Label("Import a Book", systemImage: "doc.badge.plus")
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 12)
-                        .frame(height: 38)
+                    HStack(spacing: 9) {
+                        Image(systemName: "plus")
+                            .foregroundStyle(.secondary)
+                            .frame(width: 18)
+                        Text("Import a Book")
+                        Spacer()
+                        Text("⌘O")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 10)
+                    .frame(height: 32)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
                 .keyboardShortcut("o")
             }
-            .background(.bar)
         }
         .navigationTitle("Leaf")
     }
 
-    @ViewBuilder
+    // MARK: Rows
+
     private func sidebarRow(
         _ destination: SidebarDestination,
         title: String,
         symbol: String,
         count: Int? = nil
     ) -> some View {
-        Button {
+        let isCurrent = store.destination == destination
+        return Button {
             store.destination = destination
         } label: {
-            HStack {
-                Label(title, systemImage: symbol)
+            HStack(spacing: 9) {
+                Image(systemName: symbol)
+                    .foregroundStyle(isCurrent ? AnyShapeStyle(LeafPalette.amberMark) : AnyShapeStyle(.secondary))
+                    .frame(width: 18)
+                Text(title)
+                    .fontWeight(isCurrent ? .semibold : .regular)
                 Spacer()
-                if let count {
+                if let count, count > 0 {
                     Text(count, format: .number)
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(.tertiary)
+                        .font(.caption)
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
                 }
             }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .listRowBackground(
-            store.destination == destination
-                ? Color.primary.opacity(0.08)
-                : Color.clear
-        )
+        .listRowBackground(selection(isCurrent))
+        .accessibilityAddTraits(isCurrent ? .isSelected : [])
     }
 
+    private func nowReading(_ book: BookRecord) -> some View {
+        let isCurrent = store.destination == .reader
+        return Button {
+            // Reselecting the open book would drop its loaded contents.
+            if store.selectedBook?.id == book.id {
+                store.destination = .reader
+            } else {
+                store.select(book)
+            }
+        } label: {
+            HStack(alignment: .top, spacing: 11) {
+                BookCoverView(book: book, size: .mini)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(book.title)
+                        .font(.callout.weight(.semibold))
+                        .lineLimit(2)
+                    Text(book.author)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    HStack(spacing: 7) {
+                        ProgressView(value: book.progress)
+                            .progressViewStyle(.linear)
+                            .tint(LeafPalette.amberMark)
+                            .controlSize(.mini)
+                        Text(book.progress, format: .percent.precision(.fractionLength(0)))
+                            .font(.caption2)
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.top, 5)
+                }
+            }
+            .padding(.vertical, 5)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .listRowBackground(selection(isCurrent))
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(isCurrent ? .isSelected : [])
+        .help("Continue Reading")
+    }
+
+    private func contentsRow(_ entry: BookContentEntry, index: Int) -> some View {
+        let activeIndex = store.contents.firstIndex { $0.id == store.activeContentEntryID }
+        let isCurrent = activeIndex == index
+        let isRead = activeIndex.map { index < $0 } ?? false
+        let count = sectionCounts[SectionTitle.display(entry.title)] ?? 0
+        return Button {
+            store.navigate(to: entry)
+        } label: {
+            HStack(spacing: 9) {
+                Group {
+                    if isCurrent {
+                        Circle().fill(LeafPalette.amberMark).frame(width: 7, height: 7)
+                    } else if isRead {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Circle().strokeBorder(.tertiary, lineWidth: 1.2).frame(width: 6, height: 6)
+                    }
+                }
+                .frame(width: 14)
+                Text(SectionTitle.display(entry.title))
+                    .font(.callout)
+                    .fontWeight(isCurrent ? .semibold : .regular)
+                    .foregroundStyle(isRead ? .secondary : .primary)
+                    .lineLimit(2)
+                    .padding(.leading, CGFloat(min(entry.level, 3)) * 10)
+                Spacer(minLength: 4)
+                if count > 0 {
+                    Text(count, format: .number)
+                        .font(.caption)
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                        .help("Highlights and notes in this section")
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .listRowBackground(selection(isCurrent && store.destination == .reader))
+        .help(entry.pdfPageIndex.map { "Page \($0 + 1)" } ?? SectionTitle.display(entry.title))
+        .accessibilityValue(isCurrent ? "Reading" : isRead ? "Read" : "")
+    }
+
+    private func selection(_ isSelected: Bool) -> some View {
+        RoundedRectangle(cornerRadius: 7)
+            .fill(isSelected ? Color.primary.opacity(0.075) : .clear)
+            .padding(.horizontal, 10)
+    }
+
+    private var sectionCounts: [String: Int] {
+        var counts: [String: Int] = [:]
+        for annotation in bookAnnotations {
+            let title = NotebookSections.title(
+                locator: annotation.locator, chapter: annotation.chapter, contents: store.contents
+            )
+            counts[title, default: 0] += 1
+        }
+        return counts
+    }
 }
 
 struct LibraryScreen: View {
