@@ -29,6 +29,7 @@ struct CompanionInspector: View {
 
 struct AIChatView: View {
     @Environment(ReaderStore.self) private var store
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \AIThreadRecord.updatedAt, order: .reverse) private var allThreads: [AIThreadRecord]
     @Query(sort: \AIChatMessageRecord.createdAt) private var allMessages: [AIChatMessageRecord]
@@ -38,6 +39,9 @@ struct AIChatView: View {
     @State private var requestTask: Task<Void, Never>?
 
     private var book: BookRecord? { store.selectedBook }
+    private var companionAccent: Color {
+        colorScheme == .dark ? LeafPalette.amberSoft : LeafPalette.amber
+    }
     private var threads: [AIThreadRecord] {
         allThreads.filter { $0.bookID == book?.id }
     }
@@ -54,14 +58,11 @@ struct AIChatView: View {
         VStack(spacing: 0) {
             header
             Divider()
-            modelRow
-            Divider()
             conversation
             Divider()
             composer
         }
-        .background(Color(red: 0.11, green: 0.12, blue: 0.12))
-        .environment(\.colorScheme, .dark)
+        .background(Color(nsColor: .windowBackgroundColor))
         .onAppear {
             selectedThreadID = threads.first?.id
             inputFocused = true
@@ -73,7 +74,7 @@ struct AIChatView: View {
     private var header: some View {
         HStack(spacing: 10) {
             Image(systemName: "text.book.closed")
-                .foregroundStyle(LeafPalette.amberSoft)
+                .foregroundStyle(companionAccent)
             VStack(alignment: .leading, spacing: 2) {
                 Text(book?.title ?? "AI Companion")
                     .font(.subheadline.weight(.semibold)).lineLimit(1)
@@ -81,6 +82,7 @@ struct AIChatView: View {
                     .font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer(minLength: 0)
+            modelMenu
             Menu {
                 Button("New Conversation", systemImage: "plus") { newThread() }
                 Divider()
@@ -97,37 +99,31 @@ struct AIChatView: View {
         .frame(height: 54)
     }
 
-    private var modelRow: some View {
-        HStack {
-            Menu {
-                if store.aiProvider == .appleIntelligence {
-                    Text("Apple Intelligence")
-                } else if store.aiProvider == .gemini {
-                    ForEach(GeminiModelCatalog.options, id: \.id) { model in
-                        Button(model.name) { store.geminiModel = model.id }
-                    }
-                } else {
-                    ForEach(AIModelCatalog.options, id: \.id) { model in
-                        Button(model.name) {
-                            if store.aiProvider == .chatGPT {
-                                store.chatGPTModel = model.id
-                            } else {
-                                store.openAIModel = model.id
-                            }
+    private var modelMenu: some View {
+        Menu {
+            if store.aiProvider == .appleIntelligence {
+                Text("Apple Intelligence")
+            } else if store.aiProvider == .gemini {
+                ForEach(GeminiModelCatalog.options, id: \.id) { model in
+                    Button(model.name) { store.geminiModel = model.id }
+                }
+            } else {
+                ForEach(AIModelCatalog.options, id: \.id) { model in
+                    Button(model.name) {
+                        if store.aiProvider == .chatGPT {
+                            store.chatGPTModel = model.id
+                        } else {
+                            store.openAIModel = model.id
                         }
                     }
                 }
-            } label: {
-                Label(store.activeModelLabel, systemImage: "sparkles")
-                    .font(.caption.weight(.medium))
             }
-            .menuStyle(.borderlessButton)
-            Spacer()
-            Text(store.aiProvider.displayName)
-                .font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
+        } label: {
+            Image(systemName: "sparkles")
         }
-        .padding(.horizontal, 18)
-        .frame(height: 42)
+        .menuStyle(.borderlessButton)
+        .help("\(store.aiProvider.displayName) · \(store.activeModelLabel)")
+        .accessibilityLabel("AI model: \(store.activeModelLabel)")
     }
 
     private var conversation: some View {
@@ -137,7 +133,7 @@ struct AIChatView: View {
                     if messages.isEmpty {
                         VStack(alignment: .leading, spacing: 12) {
                             Image(systemName: "sparkles")
-                                .font(.title2).foregroundStyle(LeafPalette.amberSoft)
+                                .font(.title2).foregroundStyle(companionAccent)
                             Text("Read with a second mind.").font(.title3.weight(.semibold))
                             Text("Ask about this document, select a passage, or find related papers. Answers can lead you back to the page.")
                                 .font(.subheadline).foregroundStyle(.secondary)
@@ -165,7 +161,7 @@ struct AIChatView: View {
         return VStack(alignment: .leading, spacing: 8) {
             if !store.aiContextQuote.isEmpty {
                 HStack(spacing: 7) {
-                    Image(systemName: "text.quote").foregroundStyle(LeafPalette.amberSoft)
+                    Image(systemName: "text.quote").foregroundStyle(companionAccent)
                     Text("Selected passage").font(.caption.weight(.medium))
                     Text(store.aiContextQuote)
                         .font(.caption).foregroundStyle(.secondary).lineLimit(1)
@@ -180,7 +176,7 @@ struct AIChatView: View {
                     .accessibilityLabel("Remove selected passage")
                 }
                 .padding(8)
-                .background(Color.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 7))
+                .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 7))
             }
             HStack(alignment: .bottom, spacing: 9) {
                 Menu {
@@ -212,14 +208,14 @@ struct AIChatView: View {
                 } else {
                     Button { send() } label: {
                         Image(systemName: "arrow.up.circle.fill")
-                            .font(.title2).foregroundStyle(LeafPalette.amberSoft)
+                            .font(.title2).foregroundStyle(companionAccent)
                     }
                     .disabled(store.aiDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     .help("Send question")
                 }
             }
             .padding(10)
-            .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 9))
+            .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 9))
             HStack {
                 Text("Return to send")
                 Spacer()
@@ -296,13 +292,14 @@ struct AIChatView: View {
         let bookTitle = book.title
         let format = book.format
         let url = book.fileURL
+        let contents = store.contents
 
         requestTask = Task { @MainActor in
             do {
                 let citations = await ResearchIndex.shared.search(
                     bookID: bookID, contentHash: bookHash, format: format,
                     url: url, extractedText: documentText,
-                    question: question, selected: selected
+                    question: question, selected: selected, contents: contents
                 )
                 try Task.checkCancellation()
                 assistant.citations = citations
@@ -316,7 +313,7 @@ struct AIChatView: View {
                     assistant.papers = papers
                     assistant.text = papers.isEmpty
                         ? "I couldn't confirm matching paper metadata. Try a more specific question."
-                        : "I found \(papers.count) related papers with confirmed bibliographic metadata. Open a DOI or import a paper to examine its findings."
+                        : "I found \(papers.count) papers with confirmed bibliographic details. Open a paper to examine its findings."
                 } else {
                     let evidence = citations.map {
                         "[\($0.id)] \($0.label), locator \($0.locator): \($0.quote)"
@@ -331,7 +328,7 @@ struct AIChatView: View {
                         Retrieved document passages:
                         \(evidence.isEmpty ? "No extractable passages were found." : evidence)
 
-                        Answer using Markdown. Cite claims about the book using only the source IDs above, formatted [S1]. Never invent source IDs or external papers. If passages do not support an answer, say so.
+                        Answer using Markdown. For longer answers, start with a short takeaway, then use brief headings and lists for the findings. Keep simple answers concise. Cite claims about the book using only the source IDs above, formatted [S1]. Never invent source IDs or external papers. If passages do not support an answer, say so.
                         """
                     let selectedClient = try client.get()
                     for try await delta in selectedClient.stream(
@@ -367,11 +364,17 @@ struct AIChatView: View {
 
 private struct AIConversationMessage: View {
     @Environment(ReaderStore.self) private var store
+    @State private var sourcesExpanded = false
+    @State private var externalSourcesExpanded = false
     let message: AIChatMessageRecord
     let bookHash: String
 
+    private var researchSections: (answer: String, sources: [ExternalResearchSource]) {
+        ResearchSourceLinks.split(message.text)
+    }
+
     private var citedText: String {
-        ResearchCitationLinks.linkify(message.text, citations: message.citations)
+        ResearchCitationLinks.linkify(researchSections.answer, citations: message.citations)
     }
 
     var body: some View {
@@ -380,7 +383,7 @@ private struct AIConversationMessage: View {
                 Text(message.text)
                     .font(.body).textSelection(.enabled).padding(14)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color.white.opacity(0.09), in: RoundedRectangle(cornerRadius: 14))
+                    .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
             } else {
                 if !message.text.isEmpty {
                     NativeMarkdownView(source: citedText) { url in
@@ -403,6 +406,7 @@ private struct AIConversationMessage: View {
                         .font(.caption).foregroundStyle(.orange)
                 }
                 if !message.citations.isEmpty { sources }
+                if !researchSections.sources.isEmpty { externalSources }
                 if !message.papers.isEmpty { papers }
                 if !message.text.isEmpty {
                     Button {
@@ -418,31 +422,59 @@ private struct AIConversationMessage: View {
     }
 
     private var sources: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ForEach(message.citations) { citation in
-                Button { store.navigate(to: citation) } label: {
-                    HStack(alignment: .top, spacing: 9) {
-                        Text(String(citation.id.dropFirst()))
-                            .font(.caption2.weight(.bold).monospacedDigit())
-                            .frame(width: 22, height: 22)
-                            .background(LeafPalette.sage.opacity(0.45), in: RoundedRectangle(cornerRadius: 5))
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(citation.label).font(.caption.weight(.semibold))
-                            Text(citation.quote).font(.caption).lineLimit(2)
-                                .foregroundStyle(.secondary)
+        DisclosureGroup(isExpanded: $sourcesExpanded) {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(message.citations) { citation in
+                    Button { store.navigate(to: citation) } label: {
+                        HStack(alignment: .top, spacing: 9) {
+                            Text(String(citation.id.dropFirst()))
+                                .font(.caption2.weight(.bold).monospacedDigit())
+                                .frame(width: 22, height: 22)
+                                .background(LeafPalette.sage.opacity(0.45), in: RoundedRectangle(cornerRadius: 5))
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(citation.label).font(.caption.weight(.semibold))
+                                Text(citation.quote).font(.caption).lineLimit(2)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer(minLength: 0)
+                            Image(systemName: "arrow.turn.down.right").font(.caption2)
                         }
-                        Spacer(minLength: 0)
-                        Image(systemName: "arrow.turn.down.right").font(.caption2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .buttonStyle(.plain)
-                .disabled(citation.contentHash != bookHash)
-                if citation.contentHash != bookHash {
-                    Text("Source changed; this link is stale")
-                        .font(.caption2).foregroundStyle(.orange)
+                    .buttonStyle(.plain)
+                    .disabled(citation.contentHash != bookHash)
+                    if citation.contentHash != bookHash {
+                        Text("Source changed; this link is stale")
+                            .font(.caption2).foregroundStyle(.orange)
+                    }
                 }
             }
+            .padding(.top, 8)
+        } label: {
+            Label("Document sources · \(message.citations.count)", systemImage: "text.book.closed")
+                .font(.caption.weight(.medium))
+        }
+        .padding(.top, 8)
+    }
+
+    private var externalSources: some View {
+        DisclosureGroup(isExpanded: $externalSourcesExpanded) {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(researchSections.sources) { source in
+                    Link(destination: source.url) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(source.title).font(.caption.weight(.medium))
+                            Text(source.url.host ?? source.url.absoluteString)
+                                .font(.caption2).foregroundStyle(.secondary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+            }
+            .padding(.top, 8)
+        } label: {
+            Label("External sources · \(researchSections.sources.count)", systemImage: "link")
+                .font(.caption.weight(.medium))
         }
         .padding(.top, 8)
     }
@@ -453,30 +485,54 @@ private struct AIConversationMessage: View {
                 .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
             ForEach(message.papers) { paper in
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(paper.title).font(.subheadline.weight(.medium))
+                    Link(destination: paper.landingURL) {
+                        HStack(alignment: .firstTextBaseline, spacing: 5) {
+                            Text(paper.title)
+                            Image(systemName: "arrow.up.right").font(.caption2)
+                        }
+                        .font(.subheadline.weight(.medium))
+                    }
                     Text("\(paper.authors) · \(paper.year.map(String.init) ?? "Year unknown")")
                         .font(.caption).foregroundStyle(.secondary)
-                    HStack {
-                        Link("DOI: \(paper.doi)", destination: paper.landingURL)
-                            .font(.caption)
-                        Spacer()
-                        Label("Metadata verified", systemImage: "checkmark.seal")
-                            .font(.caption2).foregroundStyle(.green)
+                    if let relevanceNote = paper.relevanceNote {
+                        Text(relevanceNote)
+                            .font(.caption).foregroundStyle(.secondary)
                     }
-                    Button("Import PDF…") { store.importerVisible = true }
+                    Text("DOI: \(paper.doi)")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                    HStack(spacing: 12) {
+                        Link("Open paper", destination: paper.landingURL)
+                        if let pdfURL = paper.pdfURL {
+                            Link("Open PDF", destination: pdfURL)
+                        }
+                        Button("Copy citation") { copyCitation(paper) }
+                            .buttonStyle(.borderless)
+                    }
+                    .font(.caption)
+                    Button("Import downloaded PDF…") { store.importerVisible = true }
                         .font(.caption)
-                        .buttonStyle(.plain)
+                        .buttonStyle(.borderless)
                 }
                 .padding(10)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 9))
+                .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 9))
             }
         }
         .padding(.top, 8)
     }
+
+    private func copyCitation(_ paper: PaperResult) {
+        let year = paper.year.map { " (\($0))." } ?? "."
+        let citation = "\(paper.authors)\(year) \(paper.title). \(paper.landingURL.absoluteString)"
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(citation, forType: .string)
+        store.showToast("Citation copied")
+    }
 }
 
 struct NativeMarkdownView: View {
+    @Environment(\.colorScheme) private var colorScheme
     let source: String
     let openLink: (URL) -> Void
 
@@ -485,14 +541,18 @@ struct NativeMarkdownView: View {
         VStack(alignment: .leading, spacing: 10) {
             ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
                 if let heading = block as? Heading {
-                    inline(heading.children.map { $0.format() }.joined())
-                        .font(heading.level == 1 ? .title3.weight(.semibold) : .headline)
+                    inline(
+                        heading.children.map { $0.format() }.joined(),
+                        font: heading.level == 1 ? .title3.weight(.semibold)
+                            : heading.level == 2 ? .headline : .subheadline.weight(.semibold)
+                    )
+                    .padding(.top, 4)
                 } else if let code = block as? CodeBlock {
                     Text(code.code)
                         .font(.system(.caption, design: .monospaced))
                         .textSelection(.enabled).padding(10)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 7))
+                        .background(Color.primary.opacity(0.07), in: RoundedRectangle(cornerRadius: 7))
                 } else if let quote = block as? BlockQuote {
                     HStack(alignment: .top, spacing: 10) {
                         Rectangle()
@@ -502,15 +562,7 @@ struct NativeMarkdownView: View {
                             .foregroundStyle(.secondary)
                     }
                 } else if block is UnorderedList || block is OrderedList {
-                    VStack(alignment: .leading, spacing: 6) {
-                        ForEach(Array(block.children.enumerated()), id: \.offset) { index, item in
-                            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                                Text(block is OrderedList ? "\(index + 1)." : "•")
-                                    .foregroundStyle(LeafPalette.amberSoft)
-                                inline(item.children.map { $0.format() }.joined(separator: "\n"))
-                            }
-                        }
-                    }
+                    listView(block)
                 } else if let table = block as? Markdown.Table {
                     tableView(table)
                 } else {
@@ -519,6 +571,26 @@ struct NativeMarkdownView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func listView(_ list: Markup) -> AnyView {
+        AnyView(VStack(alignment: .leading, spacing: 6) {
+            ForEach(Array(list.children.enumerated()), id: \.offset) { index, item in
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(list is OrderedList ? "\(index + 1)." : "•")
+                        .foregroundStyle(colorScheme == .dark ? LeafPalette.amberSoft : LeafPalette.amber)
+                    VStack(alignment: .leading, spacing: 5) {
+                        ForEach(Array(item.children.enumerated()), id: \.offset) { _, child in
+                            if child is UnorderedList || child is OrderedList {
+                                listView(child)
+                            } else {
+                                inline(child.format())
+                            }
+                        }
+                    }
+                }
+            }
+        })
     }
 
     private func tableView(_ table: Markdown.Table) -> some View {
@@ -543,16 +615,16 @@ struct NativeMarkdownView: View {
             }
             .padding(10)
         }
-        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 7))
+        .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 7))
     }
 
-    private func inline(_ source: String) -> some View {
+    private func inline(_ source: String, font: Font = .body) -> some View {
         let attributed = (try? AttributedString(
             markdown: source,
             options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
         )) ?? AttributedString(source)
         return Text(attributed)
-            .font(.body).lineSpacing(3).textSelection(.enabled)
+            .font(font).lineSpacing(3).textSelection(.enabled)
             .environment(\.openURL, OpenURLAction { url in
                 openLink(url)
                 return .handled

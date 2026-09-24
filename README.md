@@ -85,7 +85,7 @@ A Gemini app subscription does not cover Gemini API requests. **Gemini Deep Rese
 To create the DMG and ZIP used for a release:
 
 ```bash
-./scripts/build-release.sh 1.0.0
+./scripts/build-release.sh 1.3.0
 ```
 
 ## Native architecture
@@ -104,7 +104,7 @@ ZIPFoundation unpacks EPUB, DOCX, and CBZ containers. swift-markdown parses assi
 
 ## Privacy
 
-Leaf has no Leaf account, analytics, advertising, or Leaf-operated cloud backend. Imported books, reading data, and conversations are stored locally on your Mac. Apple Intelligence processes assistant requests on device. If you select OpenAI API or ChatGPT account, the question and retrieved book passages are sent to OpenAI. If you select Gemini, those passages and questions are sent to Google's Gemini API; standard model requests disable server-side interaction storage. Deep Research requires temporary background interaction storage at Google, which Leaf requests to delete when the task finishes or is stopped. Paper searches send the search terms to OpenAlex and DOI lookups to Crossref; metadata confirmation does not verify a paper's findings. API keys and OAuth tokens are stored in the macOS Keychain. The ChatGPT account integration uses Codex OAuth and its private backend, so OpenAI may change or restrict it.
+Leaf has no Leaf account, analytics, advertising, or Leaf-operated cloud backend. Imported books, reading data, and conversations are stored locally on your Mac. Passage retrieval, including meaning-based search with Apple's NaturalLanguage embeddings, runs entirely on device; its search vectors are cached in `~/Library/Application Support/Leaf/ResearchIndex`. Apple Intelligence processes assistant requests on device. If you select OpenAI API or ChatGPT account, the question and retrieved book passages are sent to OpenAI. If you select Gemini, those passages and questions are sent to Google's Gemini API; standard model requests disable server-side interaction storage. Deep Research requires temporary background interaction storage at Google, which Leaf requests to delete when the task finishes or is stopped. Paper searches send the search terms to OpenAlex and DOI lookups to Crossref; metadata confirmation does not verify a paper's findings. API keys and OAuth tokens are stored in the macOS Keychain. The ChatGPT account integration uses Codex OAuth and its private backend, so OpenAI may change or restrict it.
 
 ## License
 
