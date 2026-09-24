@@ -21,7 +21,12 @@ struct LeafNativeApp: App {
                 .environment(store)
                 .frame(minWidth: 920, minHeight: 680)
         }
-        .modelContainer(for: [BookRecord.self, AnnotationRecord.self])
+        .modelContainer(for: [
+            BookRecord.self,
+            AnnotationRecord.self,
+            AIThreadRecord.self,
+            AIChatMessageRecord.self,
+        ])
         .defaultSize(width: 1440, height: 920)
         .windowToolbarStyle(.unified(showsTitle: false))
         .handlesExternalEvents(matching: [])

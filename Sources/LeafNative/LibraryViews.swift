@@ -18,6 +18,13 @@ struct SidebarView: View {
                     title: "Now Reading",
                     symbol: "book"
                 )
+                Button {
+                    store.destination = .reader
+                    store.openAICompanion()
+                } label: {
+                    Label("AI Companion", systemImage: "sparkles")
+                }
+                .buttonStyle(.plain)
                 sidebarRow(
                     .highlights,
                     title: "Highlights",

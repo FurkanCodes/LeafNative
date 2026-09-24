@@ -1,6 +1,234 @@
 import XCTest
 import ZIPFoundation
+import SwiftData
 @testable import LeafNative
+
+private final class PaperUnavailableURLProtocol: URLProtocol {
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        let response = HTTPURLResponse(
+            url: request.url!, statusCode: 503, httpVersion: nil, headerFields: nil
+        )!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data())
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
+}
+
+final class ResearchCompanionTests: XCTestCase {
+    func testCurrentPassageWinsOverWholeDocumentMatches() async {
+        let index = ResearchIndex()
+        let selected = IndexedPassage(
+            locator: "pdf:7",
+            label: "Page 8",
+            text: "The visible page describes childhood development."
+        )
+        let citations = await index.search(
+            bookID: UUID(), contentHash: "original", format: .txt,
+            url: nil,
+            extractedText: "Neural development affects behavior. "
+                + String(repeating: "Neural development is complex. ", count: 80),
+            question: "What does this page say about development?",
+            selected: selected
+        )
+        XCTAssertEqual(citations.first?.locator, "pdf:7")
+        XCTAssertEqual(citations.first?.contentHash, "original")
+        XCTAssertTrue(citations.dropFirst().contains { $0.locator.hasPrefix("text:") })
+    }
+
+    func testGenericPassageQuestionDoesNotPullUnrelatedPages() async {
+        let index = ResearchIndex()
+        let selected = IndexedPassage(
+            locator: "pdf:7", label: "Page 8", text: "Adult neurogenesis is discussed here."
+        )
+        let citations = await index.search(
+            bookID: UUID(), contentHash: "original", format: .txt,
+            url: nil, extractedText: "A different passage mentions related papers.",
+            question: "Find papers related to this passage", selected: selected
+        )
+        XCTAssertEqual(citations.map(\.locator), ["pdf:7"])
+    }
+
+    func testOnlyKnownCitationIDsBecomeLinks() {
+        let citation = PassageCitation(
+            id: "S1", locator: "pdf:7", quote: "Evidence", label: "Page 8",
+            contentHash: "original"
+        )
+        let rendered = ResearchCitationLinks.linkify(
+            "Supported [S1], unknown [S99].", citations: [citation]
+        )
+        XCTAssertTrue(rendered.contains("[1](leaf-citation://S1)"))
+        XCTAssertTrue(rendered.contains("[S99]"))
+    }
+
+    @MainActor
+    func testChangedDocumentInvalidatesPassageNavigation() throws {
+        let oldHash = try XCTUnwrap(ResearchContentHash.value(
+            format: .txt, url: nil, text: "First version"
+        ))
+        let newHash = try XCTUnwrap(ResearchContentHash.value(
+            format: .txt, url: nil, text: "Revised version"
+        ))
+        XCTAssertNotEqual(oldHash, newHash)
+
+        let book = BookRecord(
+            title: "Draft", author: "Researcher", format: .txt,
+            contentHash: "unchanged import fingerprint"
+        )
+        let store = ReaderStore()
+        store.selectedBook = book
+        store.researchContentHash = newHash
+        store.navigate(to: PassageCitation(
+            id: "S1", locator: "text:0:5", quote: "First", label: "Document",
+            contentHash: oldHash
+        ))
+        XCTAssertNil(store.locationNavigation)
+    }
+
+    func testStreamingDeltasAndFailure() throws {
+        var parser = AIStreamParser()
+        XCTAssertEqual(try parser.consume("data: {\"type\":\"response.output_text.delta\",\"delta\":\"Hello\"}"), "Hello")
+        XCTAssertEqual(try parser.consume("data: {\"type\":\"response.output_text.delta\",\"delta\":\" world\"}"), " world")
+        XCTAssertThrowsError(try parser.consume(
+            "data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"message\":\"Unavailable\"}}}"
+        ))
+    }
+
+    func testPaperIntentAndMetadataValidation() {
+        XCTAssertTrue(ResearchIntent.wantsPapers("Can you find studies on this passage?"))
+        XCTAssertFalse(ResearchIntent.wantsPapers("Summarize this page"))
+        XCTAssertEqual(PaperSearch.normalizedDOI("https://doi.org/10.1234/ABC"), "10.1234/abc")
+        XCTAssertTrue(PaperSearch.titleMatches("The basics of brain development", "Basics of Brain Development, The"))
+        XCTAssertFalse(PaperSearch.titleMatches("The basics of brain development", "Completely different topic"))
+    }
+
+    func testPaperSearchReportsServiceFailure() async {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [PaperUnavailableURLProtocol.self]
+        let search = PaperSearch(session: URLSession(configuration: configuration))
+        do {
+            _ = try await search.search(query: "neuroplasticity")
+            XCTFail("Expected a service error")
+        } catch {
+            XCTAssertEqual(
+                error.localizedDescription,
+                "Paper search is unavailable. Try again shortly."
+            )
+        }
+    }
+
+    @MainActor
+    func testConversationRecordsPersistInModelContainer() throws {
+        let configuration = ModelConfiguration(isStoredInMemoryOnly: true)
+        let container = try ModelContainer(
+            for: BookRecord.self, AnnotationRecord.self,
+            AIThreadRecord.self, AIChatMessageRecord.self,
+            configurations: configuration
+        )
+        let context = container.mainContext
+        let bookID = UUID()
+        let thread = AIThreadRecord(bookID: bookID, title: "Methods")
+        context.insert(thread)
+        let message = AIChatMessageRecord(
+            threadID: thread.id, role: "assistant", text: "A [source].",
+            contentHash: "original"
+        )
+        message.citations = [PassageCitation(
+            id: "S1", locator: "pdf:7", quote: "Evidence",
+            label: "Page 8", contentHash: "original"
+        )]
+        context.insert(message)
+        try context.save()
+
+        let fetchedThreads = try context.fetch(FetchDescriptor<AIThreadRecord>())
+        let fetchedMessages = try context.fetch(FetchDescriptor<AIChatMessageRecord>())
+        XCTAssertEqual(fetchedThreads.first?.bookID, bookID)
+        XCTAssertEqual(fetchedMessages.first?.citations.first?.locator, "pdf:7")
+    }
+}
+
+final class OpenAIClientTests: XCTestCase {
+    func testResponsesRequestKeepsStorageDisabled() throws {
+        let request = OpenAIClient.Request(
+            model: "gpt-5.6-luna",
+            instructions: "Help with reading",
+            input: "Summarize this passage"
+        )
+        let body = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(request))
+                as? [String: Any]
+        )
+        XCTAssertEqual(body["model"] as? String, "gpt-5.6-luna")
+        XCTAssertEqual(body["instructions"] as? String, "Help with reading")
+        XCTAssertEqual(body["input"] as? String, "Summarize this passage")
+        XCTAssertEqual(body["store"] as? Bool, false)
+    }
+
+    func testResponsesTextExtraction() throws {
+        let data = Data("""
+            {"output":[
+              {"type":"reasoning","content":null},
+              {"type":"message","content":[
+                {"type":"output_text","text":"First point."},
+                {"type":"output_text","text":"Second point."}
+              ]}
+            ]}
+            """.utf8)
+        let response = try JSONDecoder().decode(OpenAIClient.Response.self, from: data)
+        XCTAssertEqual(response.text, "First point.\nSecond point.")
+    }
+}
+
+final class ChatGPTClientTests: XCTestCase {
+    func testCodexRequestStreamsWithoutStorage() throws {
+        let body = ChatGPTClient.RequestBody(
+            model: "gpt-5.6-luna",
+            instructions: "Help with reading",
+            input: [.init(role: "user", content: [.init(text: "Explain this passage")])]
+        )
+        let json = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(body))
+                as? [String: Any]
+        )
+        XCTAssertEqual(json["stream"] as? Bool, true)
+        XCTAssertEqual(json["store"] as? Bool, false)
+        XCTAssertEqual(json["instructions"] as? String, "Help with reading")
+    }
+
+    func testCodexStreamText() throws {
+        let events = """
+            event: response.output_text.delta
+            data: {"type":"response.output_text.delta","delta":"First "}
+
+            event: response.output_text.delta
+            data: {"type":"response.output_text.delta","delta":"point."}
+
+            event: response.completed
+            data: {"type":"response.completed","response":{"output":null}}
+
+            """
+        XCTAssertEqual(
+            try ChatGPTClient.extractText(from: Data(events.utf8)),
+            "First point."
+        )
+    }
+
+    func testCodexStreamFailure() throws {
+        let events = """
+            data: {"type":"response.failed","response":{"error":{"message":"Model unavailable"}}}
+
+            """
+        XCTAssertThrowsError(
+            try ChatGPTClient.extractText(from: Data(events.utf8))
+        ) { error in
+            XCTAssertEqual(error.localizedDescription, "Model unavailable")
+        }
+    }
+}
 
 final class ReaderFormatTests: XCTestCase {
     func testExtensionMapping() {

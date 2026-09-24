@@ -10,6 +10,7 @@ struct RootView: View {
     private var books: [BookRecord]
     @Query(sort: \AnnotationRecord.createdAt, order: .reverse)
     private var annotations: [AnnotationRecord]
+    @State private var availableWidth: CGFloat = 1440
 
     var body: some View {
         @Bindable var store = store
@@ -24,10 +25,21 @@ struct RootView: View {
             destinationView
         }
         .inspector(isPresented: $store.inspectorVisible) {
-            NotebookInspector(
-                annotations: selectedBookAnnotations
-            )
-            .inspectorColumnWidth(min: 270, ideal: 304, max: 380)
+            CompanionInspector(annotations: selectedBookAnnotations)
+                .inspectorColumnWidth(min: 330, ideal: 440, max: 620)
+        }
+        .onGeometryChange(for: CGFloat.self) { proxy in
+            proxy.size.width
+        } action: { _, width in
+            availableWidth = width
+            if store.companionPane == .ai && store.inspectorVisible && width < 1_350 {
+                store.columnVisibility = .detailOnly
+            }
+        }
+        .onChange(of: store.companionPane) {
+            if store.companionPane == .ai && availableWidth < 1_350 {
+                store.columnVisibility = .detailOnly
+            }
         }
         .fileImporter(
             isPresented: $store.importerVisible,
@@ -86,10 +98,6 @@ struct RootView: View {
             NotificationCenter.default.publisher(for: .leafNextPage)
         ) { _ in
             store.nextPage()
-        }
-        .sheet(isPresented: $store.aiPanelVisible) {
-            AIChatView()
-                .environment(store)
         }
         .alert(
             "Update Available",
