@@ -9,6 +9,8 @@ extension Notification.Name {
     static let leafAddNote = Notification.Name("leaf.addNote")
     static let leafPreviousPage = Notification.Name("leaf.previousPage")
     static let leafNextPage = Notification.Name("leaf.nextPage")
+    static let leafExportNotes = Notification.Name("leaf.exportNotes")
+    static let leafExportAllNotes = Notification.Name("leaf.exportAllNotes")
 }
 
 @main
@@ -49,6 +51,17 @@ struct LeafCommands: Commands {
                 NotificationCenter.default.post(name: .leafOpenBook, object: nil)
             }
             .keyboardShortcut("o")
+        }
+
+        CommandGroup(after: .importExport) {
+            Button("Export Notes…") {
+                NotificationCenter.default.post(name: .leafExportNotes, object: nil)
+            }
+            .keyboardShortcut("e", modifiers: [.command, .shift])
+
+            Button("Export All Notes…") {
+                NotificationCenter.default.post(name: .leafExportAllNotes, object: nil)
+            }
         }
 
         CommandGroup(after: .appInfo) {

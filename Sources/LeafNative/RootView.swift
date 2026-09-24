@@ -99,6 +99,37 @@ struct RootView: View {
         ) { _ in
             store.nextPage()
         }
+        .onReceive(
+            NotificationCenter.default.publisher(for: .leafExportNotes)
+        ) { _ in
+            if let book = store.selectedBook {
+                store.exportNotes(for: book, context: modelContext)
+            } else {
+                store.showToast("Open a book to export its notes")
+            }
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(for: .leafExportAllNotes)
+        ) { _ in
+            store.exportLibraryNotes(books: books, context: modelContext)
+        }
+        .alert(
+            "Set DOI",
+            isPresented: Binding(
+                get: { store.doiPromptBook != nil },
+                set: { if !$0 { store.doiPromptBook = nil } }
+            )
+        ) {
+            TextField("10.1000/example", text: $store.doiPromptText)
+            Button("Save") {
+                if let book = store.doiPromptBook {
+                    store.setDOI(store.doiPromptText, for: book)
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Leaf looks up the DOI on Crossref to build accurate BibTeX and APA references. Leave it empty to detect it automatically.")
+        }
         .alert(
             "Update Available",
             isPresented: $store.updateAlertVisible

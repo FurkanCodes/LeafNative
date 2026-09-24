@@ -106,6 +106,13 @@ struct ReaderScreen: View {
                     )
                 }
 
+                Menu {
+                    CiteMenuItems(book: book)
+                } label: {
+                    Label("Export & Cite", systemImage: "square.and.arrow.up")
+                }
+                .help("Export notes or copy a citation")
+
                 Button {
                     store.openAICompanion()
                 } label: {
@@ -365,6 +372,18 @@ struct NotebookInspector: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
+                if let book = store.selectedBook {
+                    Menu {
+                        CiteMenuItems(book: book)
+                    } label: {
+                        Label("Export & Cite", systemImage: "square.and.arrow.up")
+                            .labelStyle(.iconOnly)
+                    }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+                    .help("Export notes or copy a citation")
+                }
                 Button {
                     store.inspectorVisible = false
                 } label: {
@@ -544,6 +563,19 @@ struct AnnotationInspectorRow: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .help(annotation.note.isEmpty ? "Add Note" : "Edit Note")
+                }
+
+                if let book = store.selectedBook {
+                    Button {
+                        store.copyQuoteWithCitation(annotation, in: book)
+                    } label: {
+                        Label("Copy Quote with Citation", systemImage: "quote.opening")
+                            .labelStyle(.iconOnly)
+                    }
+                    .buttonStyle(.borderless)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .help("Copy Quote with Citation")
                 }
 
                 Spacer()
