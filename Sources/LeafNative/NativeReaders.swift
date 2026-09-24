@@ -124,7 +124,7 @@ struct NativeTextReader: NSViewRepresentable {
                         length: min(range.length, storageLength - range.location)
                     )
                     Task { @MainActor in
-                        textView.scrollRangeToVisible(clamped)
+                        Coordinator.scroll(characterIndex: clamped.location, toTopOf: textView)
                     }
                 }
             }
@@ -378,15 +378,43 @@ struct NativeTextReader: NSViewRepresentable {
             guard restoredBookID == book.id || book.lastLocator.isEmpty else {
                 return
             }
-            let charIndex = textView.characterIndexForInsertion(
-                at: clipView.bounds.origin
-            )
+            // The first line visible below the toolbar, which the text scrolls under.
+            let top = clipView.bounds.minY + clipView.contentInsets.top
+            let charIndex = Self.characterIndex(atY: top, in: textView)
             positionSaveTask?.cancel()
             positionSaveTask = Task { [weak self] in
                 try? await Task.sleep(for: .milliseconds(400))
                 guard !Task.isCancelled else { return }
                 self?.persistPosition(charIndex: charIndex)
             }
+        }
+
+        /// Scrolls so the line holding a character sits just below the toolbar,
+        /// where `characterIndex(atY:in:)` reads the position back.
+        static func scroll(characterIndex: Int, toTopOf textView: NSTextView) {
+            guard let layoutManager = textView.layoutManager,
+                  let textContainer = textView.textContainer,
+                  let clipView = textView.enclosingScrollView?.contentView
+            else { return }
+            layoutManager.ensureLayout(for: textContainer)
+            let glyph = layoutManager.glyphIndexForCharacter(at: characterIndex)
+            let line = layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+            // The opening line keeps the page's top margin in view.
+            let y = characterIndex == 0
+                ? -clipView.contentInsets.top
+                : line.minY + textView.textContainerOrigin.y - clipView.contentInsets.top
+            clipView.scroll(to: NSPoint(x: clipView.bounds.minX, y: y))
+            textView.enclosingScrollView?.reflectScrolledClipView(clipView)
+        }
+
+        /// The character starting the line at a height in the text view.
+        static func characterIndex(atY y: CGFloat, in textView: NSTextView) -> Int {
+            guard let layoutManager = textView.layoutManager,
+                  let textContainer = textView.textContainer
+            else { return 0 }
+            let point = NSPoint(x: 0, y: max(0, y - textView.textContainerOrigin.y))
+            let glyph = layoutManager.glyphIndex(for: point, in: textContainer)
+            return layoutManager.characterIndexForGlyph(at: glyph)
         }
 
         private func persistPosition(charIndex: Int) {
@@ -506,10 +534,255 @@ struct ExistingHighlight {
     let hasNote: Bool
 }
 
+/// Highlight, note, and AI actions offered just above the start of a finished
+/// selection, in a small solid panel of Leaf's own rather than a system
+/// popover, which draws a translucent material and repositions itself.
+@MainActor
+final class SelectionActionsPresenter {
+    private var panel: NSPanel?
+    private var monitor: Any?
+
+    /// Shows the bar just above the selection's first letter so the passage
+    /// stays readable, or below its last line when there is no room above.
+    /// Both rects are in screen coordinates.
+    func show(firstLine: NSRect, lastLine: NSRect, in view: NSView) {
+        close()
+        guard let window = view.window else { return }
+        let content = SelectionActionsHostingView(
+            rootView: SelectionActionsBar(arrowX: 0, arrowOnTop: false) { [weak self] in self?.close() }
+        )
+        let size = content.fittingSize
+        let gap: CGFloat = 2
+        let bounds = window.frame
+        // The arrow points at the first letter; the bar starts just left of it.
+        let letterX = firstLine.minX + 4
+        var origin = NSPoint(x: letterX - 24, y: firstLine.maxY + gap)
+        var arrowOnTop = false
+        if origin.y + size.height > bounds.maxY - 52 {
+            origin.y = lastLine.minY - gap - size.height
+            arrowOnTop = true
+        }
+        origin.x = min(max(origin.x, bounds.minX + 8), bounds.maxX - size.width - 8)
+        let arrowX = min(max(letterX - origin.x, 18), size.width - 18)
+        content.rootView = SelectionActionsBar(arrowX: arrowX, arrowOnTop: arrowOnTop) { [weak self] in
+            self?.close()
+        }
+
+        let panel = NSPanel(
+            contentRect: NSRect(origin: origin, size: size),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered, defer: false
+        )
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
+        panel.isReleasedWhenClosed = false
+        panel.contentView = content
+        // Fade in while settling a few points toward the text.
+        let rise: CGFloat = arrowOnTop ? -4 : 4
+        panel.alphaValue = 0
+        panel.setFrameOrigin(NSPoint(x: origin.x, y: origin.y - rise))
+        window.addChildWindow(panel, ordered: .above)
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.16
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            panel.animator().alphaValue = 1
+            panel.animator().setFrameOrigin(origin)
+        }
+        self.panel = panel
+
+        // Any click, scroll, or key press elsewhere dismisses the bar.
+        monitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown, .scrollWheel, .keyDown]
+        ) { [weak self] event in
+            if event.window !== self?.panel { self?.close() }
+            return event
+        }
+    }
+
+    func close() {
+        if let monitor { NSEvent.removeMonitor(monitor) }
+        monitor = nil
+        guard let panel else { return }
+        self.panel = nil
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.12
+            context.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            panel.animator().alphaValue = 0
+        } completionHandler: {
+            panel.parent?.removeChildWindow(panel)
+            panel.orderOut(nil)
+        }
+    }
+}
+
+private final class SelectionActionsHostingView: NSHostingView<SelectionActionsBar> {
+    // The panel never becomes key, so the first click must act.
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
+struct SelectionActionsBar: View {
+    /// Where the arrow's tip sits, from the bar's leading edge.
+    let arrowX: CGFloat
+    /// Whether the arrow points up, when the bar sits below the selection.
+    let arrowOnTop: Bool
+    let dismiss: () -> Void
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(HighlightColor.allCases, id: \.self) { color in
+                SelectionActionButton(
+                    help: color == .amber ? "Highlight \(color.displayName) (⇧⌘H)" : "Highlight \(color.displayName)"
+                ) { isHovered in
+                    Circle()
+                        .fill(color.swiftUIColor)
+                        .overlay(Circle().strokeBorder(.black.opacity(0.12)))
+                        .frame(width: 14, height: 14)
+                        .scaleEffect(isHovered ? 1.12 : 1)
+                        .frame(width: 28, height: 28)
+                } action: {
+                    post(.leafHighlight, color)
+                }
+                .accessibilityLabel("Highlight \(color.displayName)")
+            }
+            Rectangle()
+                .fill(Color.primary.opacity(0.12))
+                .frame(width: 1, height: 18)
+                .padding(.horizontal, 4)
+            SelectionActionButton(help: "Highlight with Note (⇧⌘N)") { _ in
+                Label("Note", systemImage: "note.text")
+                    .padding(.horizontal, 9)
+                    .frame(height: 28)
+            } action: {
+                post(.leafAddNote)
+            }
+            SelectionActionButton(help: "Ask AI About This (⇧⌘A)") { _ in
+                Label("Ask AI", systemImage: "sparkles")
+                    .padding(.horizontal, 9)
+                    .frame(height: 28)
+            } action: {
+                post(.leafAskAI)
+            }
+        }
+        .font(.system(size: 12.5))
+        .padding(.horizontal, 5)
+        .frame(height: 36)
+        .padding(arrowOnTop ? .top : .bottom, SelectionBubble.arrowHeight)
+        .background {
+            let bubble = SelectionBubble(arrowX: arrowX, arrowOnTop: arrowOnTop)
+            bubble.fill(Color(nsColor: .controlBackgroundColor))
+            bubble.stroke(Color.primary.opacity(0.14), lineWidth: 0.5)
+        }
+        .fixedSize()
+    }
+
+    private func post(_ name: Notification.Name, _ object: Any? = nil) {
+        dismiss()
+        NotificationCenter.default.post(name: name, object: object)
+    }
+}
+
+/// A rounded bar with a small arrow pointing at the selection.
+private struct SelectionBubble: Shape {
+    static let arrowHeight: CGFloat = 7
+    let arrowX: CGFloat
+    let arrowOnTop: Bool
+
+    func path(in rect: CGRect) -> Path {
+        let h = Self.arrowHeight
+        let r: CGFloat = 10
+        let top = arrowOnTop ? rect.minY + h : rect.minY
+        let bottom = arrowOnTop ? rect.maxY : rect.maxY - h
+        let (left, right) = (rect.minX, rect.maxX)
+        let x = min(max(rect.minX + arrowX, left + r + h), right - r - h)
+        // One outline, so the arrow's base has no seam.
+        var path = Path()
+        path.move(to: CGPoint(x: left + r, y: top))
+        if arrowOnTop {
+            path.addLine(to: CGPoint(x: x - h, y: top))
+            path.addLine(to: CGPoint(x: x, y: rect.minY))
+            path.addLine(to: CGPoint(x: x + h, y: top))
+        }
+        path.addLine(to: CGPoint(x: right - r, y: top))
+        path.addArc(tangent1End: CGPoint(x: right, y: top), tangent2End: CGPoint(x: right, y: top + r), radius: r)
+        path.addLine(to: CGPoint(x: right, y: bottom - r))
+        path.addArc(tangent1End: CGPoint(x: right, y: bottom), tangent2End: CGPoint(x: right - r, y: bottom), radius: r)
+        if !arrowOnTop {
+            path.addLine(to: CGPoint(x: x + h, y: bottom))
+            path.addLine(to: CGPoint(x: x, y: rect.maxY))
+            path.addLine(to: CGPoint(x: x - h, y: bottom))
+        }
+        path.addLine(to: CGPoint(x: left + r, y: bottom))
+        path.addArc(tangent1End: CGPoint(x: left, y: bottom), tangent2End: CGPoint(x: left, y: bottom - r), radius: r)
+        path.addLine(to: CGPoint(x: left, y: top + r))
+        path.addArc(tangent1End: CGPoint(x: left, y: top), tangent2End: CGPoint(x: left + r, y: top), radius: r)
+        path.closeSubpath()
+        return path
+    }
+}
+
+/// A bar button whose background tints while the pointer is over it.
+private struct SelectionActionButton<Label: View>: View {
+    let help: String
+    @ViewBuilder let label: (Bool) -> Label
+    let action: () -> Void
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            label(isHovered)
+                .contentShape(Rectangle())
+                .background(
+                    Color.primary.opacity(isHovered ? 0.08 : 0),
+                    in: RoundedRectangle(cornerRadius: 6)
+                )
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+        .animation(.easeOut(duration: 0.1), value: isHovered)
+        .help(help)
+    }
+}
+
 final class LeafTextView: NSTextView {
     var onResize: (() -> Void)?
     /// Finds the saved highlight covering a character index.
     var highlightAt: ((Int) -> ExistingHighlight?)?
+    private let selectionActions = SelectionActionsPresenter()
+
+    override func mouseDown(with event: NSEvent) {
+        selectionActions.close()
+        super.mouseDown(with: event)
+        // NSTextView usually tracks the whole drag here; otherwise mouseUp follows.
+        if NSEvent.pressedMouseButtons & 1 == 0 { showSelectionActions() }
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        super.mouseUp(with: event)
+        showSelectionActions()
+    }
+
+    private func showSelectionActions() {
+        let range = selectedRange()
+        guard range.length > 0, NSMaxRange(range) <= (string as NSString).length,
+              !(string as NSString).substring(with: range)
+                .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let window
+        else { return }
+        // The selection's first and last lines, in screen coordinates.
+        guard let layoutManager, let textContainer else { return }
+        let glyphs = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+        let origin = textContainerOrigin
+        var lines: [NSRect] = []
+        layoutManager.enumerateEnclosingRects(
+            forGlyphRange: glyphs, withinSelectedGlyphRange: glyphs, in: textContainer
+        ) { rect, _ in lines.append(rect.offsetBy(dx: origin.x, dy: origin.y)) }
+        guard let first = lines.first, let last = lines.last,
+              visibleRect.intersects(first.union(last))
+        else { return }
+        let screen = { (rect: NSRect) in window.convertToScreen(self.convert(rect, to: nil)) }
+        selectionActions.show(firstLine: screen(first), lastLine: screen(last), in: self)
+    }
 
     override func viewDidEndLiveResize() {
         super.viewDidEndLiveResize()
@@ -567,6 +840,36 @@ final class LeafTextView: NSTextView {
 final class LeafPDFView: PDFView {
     /// Whether the highlight with this ID has a note; nil when it is not Leaf's.
     var noteState: ((UUID) -> Bool?)?
+    private let selectionActions = SelectionActionsPresenter()
+
+    override func mouseDown(with event: NSEvent) {
+        selectionActions.close()
+        super.mouseDown(with: event)
+        // PDFView may track the whole drag here, swallowing the mouse-up.
+        if NSEvent.pressedMouseButtons & 1 == 0 { showSelectionActions() }
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        super.mouseUp(with: event)
+        showSelectionActions()
+    }
+
+    private func showSelectionActions() {
+        guard let window,
+              let selection = currentSelection,
+              !(selection.string?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+        else { return }
+        // The selection's first and last lines, in screen coordinates.
+        let lines = selection.selectionsByLine()
+        guard let firstLine = lines.first, let firstPage = firstLine.pages.first,
+              let lastLine = lines.last, let lastPage = lastLine.pages.last
+        else { return }
+        let first = convert(firstLine.bounds(for: firstPage), from: firstPage)
+        let last = convert(lastLine.bounds(for: lastPage), from: lastPage)
+        guard visibleRect.intersects(first.union(last)) else { return }
+        let screen = { (rect: NSRect) in window.convertToScreen(self.convert(rect, to: nil)) }
+        selectionActions.show(firstLine: screen(first), lastLine: screen(last), in: self)
+    }
 
     override func menu(for event: NSEvent) -> NSMenu? {
         let menu = super.menu(for: event) ?? NSMenu()
@@ -645,6 +948,7 @@ struct PDFReaderView: NSViewRepresentable {
     func makeNSView(context: Context) -> PDFView {
         let view = LeafPDFView()
         view.document = PDFDocument(url: url)
+        if let document = view.document { Self.softenSavedHighlights(in: document) }
         view.autoScales = true
         view.displayMode = .singlePageContinuous
         view.displayDirection = .vertical
@@ -695,6 +999,21 @@ struct PDFReaderView: NSViewRepresentable {
         let parts = locator.split(separator: ":")
         guard parts.count == 2, parts[0] == "pdf" else { return nil }
         return Int(parts[1])
+    }
+
+    /// Earlier versions saved Leaf highlights in their full color, which a
+    /// PDF shows opaque. Display those with the light tint new ones use; the
+    /// file itself is left alone.
+    static func softenSavedHighlights(in document: PDFDocument) {
+        for index in 0..<document.pageCount {
+            guard let page = document.page(at: index) else { continue }
+            for annotation in page.annotations
+            where annotation.contents?.hasPrefix("leaf:") == true
+                && annotation.type?.trimmingCharacters(in: CharacterSet(charactersIn: "/")) == "Highlight" {
+                let tint = HighlightColor.nearest(to: annotation.color).pdfHighlightColor
+                if annotation.color.usingColorSpace(.sRGB) != tint { annotation.color = tint }
+            }
+        }
     }
 
     private func navigate(to locator: String, in view: PDFView) {

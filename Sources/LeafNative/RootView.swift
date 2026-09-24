@@ -18,7 +18,8 @@ struct RootView: View {
         NavigationSplitView(columnVisibility: $store.columnVisibility) {
             SidebarView(
                 books: books,
-                annotationCount: annotations.count
+                annotationCount: annotations.count,
+                bookAnnotations: selectedBookAnnotations
             )
             .navigationSplitViewColumnWidth(min: 210, ideal: 236, max: 300)
         } detail: {
@@ -50,7 +51,10 @@ struct RootView: View {
         }
         .overlay(alignment: .bottom) {
             if let toast = store.toast {
-                ToastView(message: toast)
+                ToastView(
+                    message: toast,
+                    undo: store.toastUndo == nil ? nil : { store.undoFromToast() }
+                )
                     .padding(.bottom, 28)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }

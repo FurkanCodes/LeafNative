@@ -1037,7 +1037,7 @@ final class NotebookTests: XCTestCase {
         store.selectedBook = book
         store.companionPane = .ai
         store.inspectorVisible = false
-        store.inspectorTab = 1
+        store.notebookFilter = .notes
 
         store.addNote(context: context)
         let note = try XCTUnwrap(try context.fetch(FetchDescriptor<AnnotationRecord>()).first)
@@ -1046,7 +1046,11 @@ final class NotebookTests: XCTestCase {
         XCTAssertEqual(store.editingAnnotationID, note.id)
         XCTAssertEqual(store.companionPane, .notebook)
         XCTAssertTrue(store.inspectorVisible)
-        XCTAssertEqual(store.inspectorTab, 0, "the empty entry must not be hidden by the Notes filter")
+        XCTAssertEqual(
+            NotebookSections.matching([note], filter: store.notebookFilter, query: "", editingID: store.editingAnnotationID).map(\.id),
+            [note.id],
+            "the empty entry must not be hidden by the Notes filter"
+        )
 
         store.finishEditingNote(note, context: context)
         XCTAssertNil(store.editingAnnotationID)
@@ -1081,5 +1085,149 @@ final class NotebookTests: XCTestCase {
         highlight.note = ""
         store.finishEditingNote(highlight, context: context)
         XCTAssertEqual(try context.fetch(FetchDescriptor<AnnotationRecord>()).count, 1, "highlights stay without a note")
+    }
+
+    func testNotebookGroupsEntriesByContentsSection() {
+        let book = UUID()
+        let contents = [
+            BookContentEntry(id: "0", title: "A Practice of Noticing", locator: "text:0:22", level: 0),
+            BookContentEntry(id: "1", title: "THE INTERVAL BEFORE JUDGMENT", locator: "text:900:28", level: 1),
+        ]
+        let late = AnnotationRecord(bookID: book, quote: "records of contact", locator: "text:1500:18", chapter: "A Practice of Noticing")
+        let early = AnnotationRecord(bookID: book, quote: "remain open", locator: "text:400:11", chapter: "A Practice of Noticing")
+        let middle = AnnotationRecord(bookID: book, quote: "brief but trainable", locator: "text:950:19", chapter: "A Practice of Noticing")
+
+        let sections = NotebookSections.build([late, early, middle], contents: contents)
+
+        XCTAssertEqual(sections.map(\.title), ["A Practice of Noticing", "The Interval Before Judgment"])
+        XCTAssertEqual(sections[0].annotations.map(\.id), [early.id])
+        XCTAssertEqual(sections[1].annotations.map(\.id), [middle.id, late.id], "entries follow reading order")
+    }
+
+    func testNotebookSectionFallsBackToStoredChapter() {
+        XCTAssertEqual(
+            NotebookSections.title(locator: "pdf:4", chapter: "Methods · Page 5 of 20", contents: []),
+            "Methods"
+        )
+        XCTAssertEqual(NotebookSections.title(locator: "pdf:4", chapter: "Page 5 of 20", contents: []), NotebookSections.untitled)
+        XCTAssertEqual(NotebookSections.title(locator: "text:0:0", chapter: "Start reading", contents: []), NotebookSections.untitled)
+        XCTAssertEqual(NotebookSections.title(locator: "text:9:3", chapter: "4. A Practice of Noticing", contents: []), "A Practice of Noticing")
+
+        let outline = [BookContentEntry(id: "p", title: "Results", locator: "pdf:6", level: 0)]
+        XCTAssertEqual(NotebookSections.title(locator: "pdf:8", chapter: "Page 9 of 20", contents: outline), "Results")
+        XCTAssertEqual(
+            NotebookSections.title(locator: "pdf:2", chapter: "Page 3 of 20", contents: outline),
+            NotebookSections.untitled,
+            "a page before the first outline entry has no section"
+        )
+    }
+
+    func testReadingMarkerSitsAfterEntriesBeforeThePosition() {
+        let book = UUID()
+        let ordered = [
+            AnnotationRecord(bookID: book, quote: "a", locator: "text:100:5", chapter: ""),
+            AnnotationRecord(bookID: book, quote: "b", locator: "text:900:5", chapter: ""),
+            AnnotationRecord(bookID: book, quote: "c", locator: "text:1500:5", chapter: ""),
+        ]
+        XCTAssertEqual(NotebookSections.readingMarkerIndex(in: ordered, readingLocator: "text:1000:0"), 2)
+        XCTAssertEqual(NotebookSections.readingMarkerIndex(in: ordered, readingLocator: "text:0:0"), 0)
+        XCTAssertEqual(NotebookSections.readingMarkerIndex(in: ordered, readingLocator: "text:9000:0"), 3)
+        XCTAssertNil(NotebookSections.readingMarkerIndex(in: ordered, readingLocator: ""))
+
+        let pages = [
+            AnnotationRecord(bookID: book, quote: "p3", locator: "pdf:2", chapter: ""),
+            AnnotationRecord(bookID: book, quote: "p5", locator: "pdf:4", chapter: ""),
+        ]
+        XCTAssertEqual(NotebookSections.readingMarkerIndex(in: pages, readingLocator: "pdf:2"), 1, "entries on the open page come first")
+    }
+
+    func testNotebookFilterAndSearch() {
+        let book = UUID()
+        let amber = AnnotationRecord(bookID: book, quote: "We name, sort, and move on.", color: .amber, locator: "text:1:1", chapter: "")
+        let rose = AnnotationRecord(bookID: book, quote: "brief but trainable", note: "The thesis.", color: .rose, locator: "text:2:1", chapter: "")
+        let pageNote = AnnotationRecord(bookID: book, quote: "", note: "Compare with Weil.", locator: "text:3:0", chapter: "")
+        let all = [amber, rose, pageNote]
+
+        func ids(_ filter: NotebookFilter, _ query: String = "") -> [UUID] {
+            NotebookSections.matching(all, filter: filter, query: query, editingID: nil).map(\.id)
+        }
+        XCTAssertEqual(ids(.all), [amber.id, rose.id, pageNote.id])
+        XCTAssertEqual(ids(.notes), [rose.id, pageNote.id])
+        XCTAssertEqual(ids(.color(.rose)), [rose.id])
+        XCTAssertEqual(ids(.color(.amber)), [amber.id], "page notes have no highlight color")
+        XCTAssertEqual(ids(.all, "weil"), [pageNote.id], "search covers notes, ignoring case")
+        XCTAssertEqual(ids(.all, "TRAINABLE"), [rose.id], "search covers quotes")
+        XCTAssertEqual(
+            NotebookSections.matching(all, filter: .notes, query: "", editingID: amber.id).map(\.id),
+            [amber.id, rose.id, pageNote.id]
+        )
+    }
+
+    func testSectionTitlesReadAsTitleCase() {
+        XCTAssertEqual(SectionTitle.display("THE INTERVAL BEFORE JUDGMENT"), "The Interval Before Judgment")
+        XCTAssertEqual(SectionTitle.display("MAKE A PLACE FOR RETURN"), "Make a Place for Return")
+        XCTAssertEqual(SectionTitle.display("A Practice of Noticing"), "A Practice of Noticing")
+        XCTAssertEqual(SectionTitle.display("iOS and the NeXT era"), "iOS and the NeXT era", "mixed case is left alone")
+        XCTAssertEqual(SectionTitle.display("  42  "), "42")
+    }
+
+    @MainActor
+    func testDeletedTextHighlightCanBeRestored() throws {
+        let container = try ModelContainer(
+            for: BookRecord.self, AnnotationRecord.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+        )
+        let context = container.mainContext
+        let book = BookRecord(title: "Essay", author: "A", format: .txt)
+        context.insert(book)
+        let highlight = AnnotationRecord(
+            bookID: book.id, quote: "records of contact", note: "Key idea", color: .sage,
+            locator: "text:40:18", chapter: "Two"
+        )
+        context.insert(highlight)
+        let id = highlight.id
+        let store = ReaderStore()
+        store.selectedBook = book
+
+        store.deleteHighlight(highlight, context: context)
+        XCTAssertTrue(try context.fetch(FetchDescriptor<AnnotationRecord>()).isEmpty)
+        XCTAssertNotNil(store.toastUndo)
+
+        store.undoFromToast()
+        let restored = try XCTUnwrap(try context.fetch(FetchDescriptor<AnnotationRecord>()).first)
+        XCTAssertEqual(restored.id, id)
+        XCTAssertEqual(restored.note, "Key idea")
+        XCTAssertEqual(restored.color, .sage)
+        XCTAssertEqual(restored.locator, "text:40:18")
+        XCTAssertNil(store.toast)
+    }
+
+    @MainActor
+    func testDeletedPDFHighlightOffersNoUndo() throws {
+        let container = try ModelContainer(
+            for: BookRecord.self, AnnotationRecord.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+        )
+        let context = container.mainContext
+        let book = BookRecord(title: "Paper", author: "A", format: .pdf)
+        context.insert(book)
+        let highlight = AnnotationRecord(bookID: book.id, quote: "a finding", locator: "pdf:3", chapter: "")
+        context.insert(highlight)
+        let store = ReaderStore()
+        store.selectedBook = book
+
+        store.deleteHighlight(highlight, context: context)
+        XCTAssertEqual(store.toast, "Highlight deleted")
+        XCTAssertNil(store.toastUndo, "the PDF file has already been rewritten without it")
+    }
+
+    func testPDFHighlightTintsAreOpaqueAndRoundTrip() {
+        for color in HighlightColor.allCases {
+            let tint = color.pdfHighlightColor
+            XCTAssertEqual(tint.alphaComponent, 1, "PDF files drop annotation alpha")
+            XCTAssertGreaterThan(tint.redComponent + tint.greenComponent + tint.blueComponent, 2.2, "a light tint")
+            XCTAssertEqual(HighlightColor.nearest(to: tint), color)
+            XCTAssertEqual(HighlightColor.nearest(to: color.nsColor), color, "full colors from older files")
+        }
     }
 }

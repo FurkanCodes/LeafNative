@@ -76,7 +76,7 @@ private actor PDFHighlightPersistence {
                 forType: .highlight,
                 withProperties: nil
             )
-            annotation.color = color.nsColor.withAlphaComponent(0.34)
+            annotation.color = color.pdfHighlightColor
             annotation.contents = PDFHighlightIdentity.tag(for: annotationID)
             page.addAnnotation(annotation)
         }
@@ -132,7 +132,8 @@ final class ReaderStore {
     var selectedBook: BookRecord?
     var columnVisibility: NavigationSplitViewVisibility = .all
     var inspectorVisible = true
-    var inspectorTab = 0
+    var notebookFilter: NotebookFilter = .all
+    var notebookQuery = ""
     enum CompanionPane { case notebook, ai }
     var companionPane: CompanionPane = .notebook
     var importerVisible = false
@@ -155,6 +156,7 @@ final class ReaderStore {
     var doiPromptText = ""
     var locationNavigation: LocationNavigation?
     var toast: String?
+    var toastUndo: (@MainActor () -> Void)?
     var updateStatus: UpdateStatus = .idle
     var availableUpdate: GitHubRelease?
     var updateAlertVisible = false
@@ -497,14 +499,23 @@ final class ReaderStore {
         )
     }
 
-    func showToast(_ message: String) {
+    func showToast(_ message: String, undo: (@MainActor () -> Void)? = nil) {
         toast = message
+        toastUndo = undo
         Task { @MainActor in
-            try? await Task.sleep(for: .seconds(2))
+            try? await Task.sleep(for: .seconds(undo == nil ? 2 : 5))
             if toast == message {
                 toast = nil
+                toastUndo = nil
             }
         }
+    }
+
+    func undoFromToast() {
+        let undo = toastUndo
+        toast = nil
+        toastUndo = nil
+        undo?()
     }
 
     func previousPage() {
@@ -551,7 +562,7 @@ final class ReaderStore {
                         forType: .highlight,
                         withProperties: nil
                     )
-                    annotation.color = color.nsColor.withAlphaComponent(0.34)
+                    annotation.color = color.pdfHighlightColor
                     annotation.contents = PDFHighlightIdentity.tag(for: recordID)
                     page.addAnnotation(annotation)
 
@@ -656,8 +667,16 @@ final class ReaderStore {
             }
         }
 
+        // PDF highlights are also erased from the document, so only entries
+        // that live entirely in the library can come back.
+        let restorable = isPageNote || !locator.hasPrefix("pdf:")
+        let snapshot = AnnotationSnapshot(annotation)
         context.delete(annotation)
-        showToast(isPageNote ? "Note deleted" : "Highlight deleted")
+        var undo: (@MainActor () -> Void)?
+        if restorable {
+            undo = { context.insert(snapshot.record()) }
+        }
+        showToast(isPageNote ? "Note deleted" : "Highlight deleted", undo: undo)
     }
 
     /// Highlights the selection and opens its note editor, or starts a note
@@ -693,7 +712,6 @@ final class ReaderStore {
     func beginEditingNote(_ annotation: AnnotationRecord) {
         companionPane = .notebook
         inspectorVisible = true
-        if inspectorTab == 1, annotation.note.isEmpty { inspectorTab = 0 }
         editingAnnotationID = annotation.id
     }
 
@@ -1019,6 +1037,36 @@ final class ReaderStore {
     }
 }
 
+/// The fields of a deleted annotation, kept so the deletion can be undone.
+struct AnnotationSnapshot {
+    let id: UUID
+    let bookID: UUID
+    let quote: String
+    let note: String
+    let color: HighlightColor
+    let locator: String
+    let chapter: String
+    let createdAt: Date
+
+    init(_ annotation: AnnotationRecord) {
+        id = annotation.id
+        bookID = annotation.bookID
+        quote = annotation.quote
+        note = annotation.note
+        color = annotation.color
+        locator = annotation.locator
+        chapter = annotation.chapter
+        createdAt = annotation.createdAt
+    }
+
+    func record() -> AnnotationRecord {
+        AnnotationRecord(
+            id: id, bookID: bookID, quote: quote, note: note, color: color,
+            locator: locator, chapter: chapter, createdAt: createdAt
+        )
+    }
+}
+
 extension HighlightColor {
     var nsColor: NSColor {
         switch self {
@@ -1030,5 +1078,36 @@ extension HighlightColor {
 
     var swiftUIColor: Color {
         Color(nsColor: nsColor)
+    }
+
+    /// The tint written into PDF highlights: the color at 34% over white,
+    /// stored opaque. PDF files keep no alpha for annotation colors, so a
+    /// translucent color would reopen at full strength.
+    var pdfHighlightColor: NSColor {
+        let base = nsColor.usingColorSpace(.sRGB) ?? nsColor
+        let strength: CGFloat = 0.34
+        func tint(_ component: CGFloat) -> CGFloat { 1 - strength * (1 - component) }
+        return NSColor(
+            srgbRed: tint(base.redComponent),
+            green: tint(base.greenComponent),
+            blue: tint(base.blueComponent),
+            alpha: 1
+        )
+    }
+
+    /// The Leaf color closest to an annotation's stored color.
+    static func nearest(to color: NSColor) -> HighlightColor {
+        let target = color.usingColorSpace(.sRGB) ?? color
+        func distance(_ other: NSColor) -> CGFloat {
+            let c = other.usingColorSpace(.sRGB) ?? other
+            return pow(c.redComponent - target.redComponent, 2)
+                + pow(c.greenComponent - target.greenComponent, 2)
+                + pow(c.blueComponent - target.blueComponent, 2)
+        }
+        // Match either form: full colors from older files, or the tints.
+        func closeness(_ color: HighlightColor) -> CGFloat {
+            min(distance(color.nsColor), distance(color.pdfHighlightColor))
+        }
+        return allCases.min { closeness($0) < closeness($1) } ?? .amber
     }
 }

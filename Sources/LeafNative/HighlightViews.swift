@@ -53,7 +53,7 @@ struct AllHighlightsView: View {
                 }
             }
         }
-        .navigationTitle("Highlights")
+        .navigationTitle("Highlights & Notes")
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button {
