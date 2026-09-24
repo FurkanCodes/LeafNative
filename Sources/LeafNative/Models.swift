@@ -91,6 +91,8 @@ final class BookRecord {
     var lastLocator: String = ""
     var bookmarkLocator: String = ""
     var contentHash: String = ""
+    var doi: String = ""
+    var citationData: Data = Data()
     var coverToneRaw: String
     var isFavorite: Bool
     var isBookmarked: Bool
@@ -139,6 +141,12 @@ final class BookRecord {
 
     var fileURL: URL? {
         filePath.isEmpty ? nil : URL(fileURLWithPath: filePath)
+    }
+
+    /// Bibliographic metadata confirmed through Crossref, if any.
+    var citation: CitationMetadata? {
+        get { citationData.isEmpty ? nil : try? JSONDecoder().decode(CitationMetadata.self, from: citationData) }
+        set { citationData = newValue.flatMap { try? JSONEncoder().encode($0) } ?? Data() }
     }
 }
 

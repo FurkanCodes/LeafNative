@@ -147,6 +147,10 @@ final class ReaderStore {
     var selectedTextRange = NSRange(location: NSNotFound, length: 0)
     var selectedTextQuote = ""
     var activePDFView: PDFView?
+    /// Books whose DOI lookup finished without a match this session.
+    var settledCitationLookups: Set<UUID> = []
+    var doiPromptBook: BookRecord?
+    var doiPromptText = ""
     var locationNavigation: LocationNavigation?
     var toast: String?
     var updateStatus: UpdateStatus = .idle

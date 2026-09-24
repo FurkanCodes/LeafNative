@@ -30,6 +30,8 @@ Leaf keeps the book at the center. Its three-pane workspace gives the library, r
 - **Research companion** — local conversations per book, streamed Markdown answers, passage retrieval, and scholarly paper discovery with DOI metadata checked against Crossref.
 - **Fast, deliberate highlighting** — select text, choose Amber, Sage, or Rose, and keep reading.
 - **Highlights that lead somewhere** — click a saved highlight to jump directly back to its passage.
+- **Notes that leave with you** — export highlights and notes as Markdown with YAML front matter and Pandoc citations (`[@key, p. 12]`), or export the whole library with a shared BibTeX file, ready for Obsidian, Zotero, or LaTeX.
+- **Citations from the DOI** — Leaf finds a paper's DOI, confirms it against Crossref, and copies APA references, BibTeX, or a quote with its in-text citation.
 - **Real PDF annotations** — PDF highlights are written into the document and can be removed from Leaf.
 - **Useful contents navigation** — EPUB structure and PDF outlines become a navigable table of contents.
 - **Local-first library** — books, progress, bookmarks, highlights, and notes stay on your Mac.
@@ -53,6 +55,7 @@ DRM-protected Kindle and EPUB files require authorization from their vendor and 
 | Find in book | `⌘F` |
 | Highlight selection | `⇧⌘H` |
 | Highlight with a note | `⇧⌘N` |
+| Export notes as Markdown | `⇧⌘E` |
 | Previous / next page | `←` / `→` |
 
 ## Install
@@ -104,7 +107,7 @@ ZIPFoundation unpacks EPUB, DOCX, and CBZ containers. swift-markdown parses assi
 
 ## Privacy
 
-Leaf has no Leaf account, analytics, advertising, or Leaf-operated cloud backend. Imported books, reading data, and conversations are stored locally on your Mac. Passage retrieval, including meaning-based search with Apple's NaturalLanguage embeddings, runs entirely on device; its search vectors are cached in `~/Library/Application Support/Leaf/ResearchIndex`. Apple Intelligence processes assistant requests on device. If you select OpenAI API or ChatGPT account, the question and retrieved book passages are sent to OpenAI. If you select Gemini, those passages and questions are sent to Google's Gemini API; standard model requests disable server-side interaction storage. Deep Research requires temporary background interaction storage at Google, which Leaf requests to delete when the task finishes or is stopped. Paper searches send the search terms to OpenAlex and DOI lookups to Crossref; metadata confirmation does not verify a paper's findings. API keys and OAuth tokens are stored in the macOS Keychain. The ChatGPT account integration uses Codex OAuth and its private backend, so OpenAI may change or restrict it.
+Leaf has no Leaf account, analytics, advertising, or Leaf-operated cloud backend. Imported books, reading data, and conversations are stored locally on your Mac. Passage retrieval, including meaning-based search with Apple's NaturalLanguage embeddings, runs entirely on device; its search vectors are cached in `~/Library/Application Support/Leaf/ResearchIndex`. Apple Intelligence processes assistant requests on device. If you select OpenAI API or ChatGPT account, the question and retrieved book passages are sent to OpenAI. If you select Gemini, those passages and questions are sent to Google's Gemini API; standard model requests disable server-side interaction storage. Deep Research requires temporary background interaction storage at Google, which Leaf requests to delete when the task finishes or is stopped. Paper searches send the search terms to OpenAlex and DOI lookups to Crossref; when you export notes or copy a citation, Leaf sends the document's DOI to Crossref (or doi.org for DOIs registered elsewhere, such as arXiv). metadata confirmation does not verify a paper's findings. API keys and OAuth tokens are stored in the macOS Keychain. The ChatGPT account integration uses Codex OAuth and its private backend, so OpenAI may change or restrict it.
 
 ## License
 

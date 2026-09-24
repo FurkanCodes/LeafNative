@@ -2,6 +2,7 @@ import SwiftUI
 
 struct AllHighlightsView: View {
     @Environment(ReaderStore.self) private var store
+    @Environment(\.modelContext) private var modelContext
     let annotations: [AnnotationRecord]
     let books: [BookRecord]
 
@@ -40,9 +41,27 @@ struct AllHighlightsView: View {
                     .padding(.vertical, 5)
                 }
                 .buttonStyle(.plain)
+                .contextMenu {
+                    if let book = books.first(where: { $0.id == annotation.bookID }) {
+                        Button("Copy Quote with Citation") {
+                            store.copyQuoteWithCitation(annotation, in: book)
+                        }
+                    }
+                }
             }
         }
         .navigationTitle("Highlights")
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    store.exportLibraryNotes(books: books, context: modelContext)
+                } label: {
+                    Label("Export All Notes", systemImage: "square.and.arrow.up")
+                }
+                .help("Export every book’s notes as Markdown, with a BibTeX library")
+                .disabled(annotations.isEmpty)
+            }
+        }
         .overlay {
             if annotations.isEmpty {
                 ContentUnavailableView(

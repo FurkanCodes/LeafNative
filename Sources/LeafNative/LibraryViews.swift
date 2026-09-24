@@ -225,6 +225,8 @@ struct LibraryScreen: View {
                                     Button("Open") {
                                         store.select(book)
                                     }
+                                    Divider()
+                                    CiteMenuItems(book: book)
                                 }
                             }
                         }
