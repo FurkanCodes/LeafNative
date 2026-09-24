@@ -982,3 +982,104 @@ final class CitationExportTests: XCTestCase {
         XCTAssertTrue(book.citationData.isEmpty)
     }
 }
+
+final class NotebookTests: XCTestCase {
+    func testDriftedHighlightsReanchorToNearestQuote() {
+        let text = "Alpha beta. Gamma delta. Alpha beta again." as NSString
+        XCTAssertNil(AnnotationAnchoring.repairedLocator("text:0:10", quote: "Alpha beta", in: text))
+        XCTAssertEqual(AnnotationAnchoring.repairedLocator("text:2:10", quote: "Alpha beta", in: text), "text:0:10")
+        XCTAssertEqual(AnnotationAnchoring.repairedLocator("text:30:10", quote: "Alpha beta", in: text), "text:25:10")
+        XCTAssertNil(AnnotationAnchoring.repairedLocator("text:0:5", quote: "Missing", in: text))
+        XCTAssertNil(AnnotationAnchoring.repairedLocator("text:4:0", quote: "", in: text))
+        XCTAssertEqual(AnnotationAnchoring.repairedLocator("text:900:10", quote: "Gamma delta", in: text), "text:12:11")
+        XCTAssertEqual(AnnotationAnchoring.repairedLocator("text:3:12", quote: "Gamma delta:", in: text), "text:12:11")
+    }
+
+    func testSampleHighlightsCoverTheirQuotes() {
+        let sample = ContentLoader.sampleChapter as NSString
+        for quote in [
+            "Some lines need to remain open for a while. They gather meaning from what follows",
+            "The strongest notes are not summaries of what the author has said. They are records of contact",
+        ] {
+            XCTAssertNotEqual(sample.range(of: quote).location, NSNotFound, quote)
+        }
+    }
+
+    func testNotebookUsesReadingOrder() {
+        XCTAssertTrue(AnnotationLocation.position("pdf:2") < AnnotationLocation.position("pdf:10"))
+        XCTAssertTrue(AnnotationLocation.position("text:40:3") < AnnotationLocation.position("text:400:0"))
+        XCTAssertEqual(AnnotationLocation.page("pdf:0"), 1)
+        XCTAssertNil(AnnotationLocation.page("text:0:1"))
+    }
+
+    func testPageNotesExportWithoutQuotes() {
+        let citation = CitationMetadata(type: "document", title: "Paper", authors: [.init(given: "Ada", family: "Lovelace")], year: 1843)
+        let notes = [
+            ExportedHighlight(quote: "", note: "Compare with chapter 2.", color: .amber, locator: "pdf:4", chapter: "", createdAt: .now),
+            ExportedHighlight(quote: "", note: "   ", color: .amber, locator: "pdf:5", chapter: "", createdAt: .now),
+        ]
+        let markdown = NotesMarkdown.document(citation: citation, highlights: notes)
+        XCTAssertTrue(markdown.contains("**Note** · p. 5 [@lovelace1843paper, p. 5]\n\nCompare with chapter 2."))
+        XCTAssertFalse(markdown.contains("p. 6"))
+        XCTAssertTrue(markdown.contains("highlights: 0"))
+    }
+
+    @MainActor
+    func testNoteShortcutWithoutSelectionStartsAPageNote() throws {
+        let container = try ModelContainer(
+            for: BookRecord.self, AnnotationRecord.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+        )
+        let context = container.mainContext
+        let book = BookRecord(title: "Essay", author: "A", format: .txt, lastLocator: "text:120:0")
+        context.insert(book)
+        let store = ReaderStore()
+        store.selectedBook = book
+        store.companionPane = .ai
+        store.inspectorVisible = false
+        store.inspectorTab = 1
+
+        store.addNote(context: context)
+        let note = try XCTUnwrap(try context.fetch(FetchDescriptor<AnnotationRecord>()).first)
+        XCTAssertEqual(note.quote, "")
+        XCTAssertEqual(note.locator, "text:120:0")
+        XCTAssertEqual(store.editingAnnotationID, note.id)
+        XCTAssertEqual(store.companionPane, .notebook)
+        XCTAssertTrue(store.inspectorVisible)
+        XCTAssertEqual(store.inspectorTab, 0, "the empty entry must not be hidden by the Notes filter")
+
+        store.finishEditingNote(note, context: context)
+        XCTAssertNil(store.editingAnnotationID)
+        XCTAssertTrue(try context.fetch(FetchDescriptor<AnnotationRecord>()).isEmpty, "empty page notes are discarded")
+    }
+
+    @MainActor
+    func testNoteOnSelectionOpensEditorForNewHighlight() throws {
+        let container = try ModelContainer(
+            for: BookRecord.self, AnnotationRecord.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+        )
+        let context = container.mainContext
+        let book = BookRecord(title: "Essay", author: "A", format: .txt)
+        context.insert(book)
+        let store = ReaderStore()
+        store.selectedBook = book
+        store.selectedTextRange = NSRange(location: 10, length: 5)
+        store.selectedTextQuote = "hello"
+
+        store.addNote(context: context)
+        let highlight = try XCTUnwrap(try context.fetch(FetchDescriptor<AnnotationRecord>()).first)
+        XCTAssertEqual(highlight.quote, "hello")
+        XCTAssertEqual(store.editingAnnotationID, highlight.id)
+
+        highlight.note = "  keep me  "
+        store.finishEditingNote(highlight, context: context)
+        XCTAssertEqual(highlight.note, "keep me")
+        XCTAssertEqual(try context.fetch(FetchDescriptor<AnnotationRecord>()).count, 1)
+
+        store.finishEditingNote(highlight, context: context)
+        highlight.note = ""
+        store.finishEditingNote(highlight, context: context)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<AnnotationRecord>()).count, 1, "highlights stay without a note")
+    }
+}

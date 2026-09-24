@@ -96,6 +96,13 @@ struct NativeTextReader: NSViewRepresentable {
         )
 
         context.coordinator.book = book
+        let highlightRanges = annotations.compactMap { annotation -> (NSRange, ExistingHighlight)? in
+            guard let range = textRange(from: annotation.locator), range.length > 0 else { return nil }
+            return (range, ExistingHighlight(id: annotation.id, hasNote: !annotation.note.isEmpty))
+        }
+        (textView as? LeafTextView)?.highlightAt = { index in
+            highlightRanges.first { NSLocationInRange(index, $0.0) }?.1
+        }
         if context.coordinator.styleSignature != styleSignature {
             context.coordinator.styleSignature = styleSignature
             context.coordinator.annotationSnapshots = annotationSnapshots
@@ -463,6 +470,29 @@ private enum LeafAnnotationContextMenu {
         menu.insertItem(highlightItem, at: 0)
     }
 
+    /// Items for right-clicking an existing highlight with no selection.
+    static func insertExisting(
+        _ highlight: ExistingHighlight,
+        into menu: NSMenu,
+        target: AnyObject,
+        noteAction: Selector,
+        removeAction: Selector
+    ) {
+        let note = NSMenuItem(
+            title: highlight.hasNote ? "Edit Note" : "Add Note",
+            action: noteAction,
+            keyEquivalent: ""
+        )
+        note.target = target
+        note.representedObject = highlight.id
+        let remove = NSMenuItem(title: "Remove Highlight", action: removeAction, keyEquivalent: "")
+        remove.target = target
+        remove.representedObject = highlight.id
+        menu.insertItem(.separator(), at: 0)
+        menu.insertItem(remove, at: 0)
+        menu.insertItem(note, at: 0)
+    }
+
     static func color(from sender: NSMenuItem) -> HighlightColor {
         guard let rawValue = sender.representedObject as? String else {
             return .amber
@@ -471,8 +501,15 @@ private enum LeafAnnotationContextMenu {
     }
 }
 
+struct ExistingHighlight {
+    let id: UUID
+    let hasNote: Bool
+}
+
 final class LeafTextView: NSTextView {
     var onResize: (() -> Void)?
+    /// Finds the saved highlight covering a character index.
+    var highlightAt: ((Int) -> ExistingHighlight?)?
 
     override func viewDidEndLiveResize() {
         super.viewDidEndLiveResize()
@@ -489,8 +526,26 @@ final class LeafTextView: NSTextView {
                 noteAction: #selector(addLeafNote),
                 askAIAction: #selector(askAI)
             )
+        } else {
+            let point = convert(event.locationInWindow, from: nil)
+            let index = characterIndexForInsertion(at: point)
+            if let highlight = highlightAt?(index) {
+                LeafAnnotationContextMenu.insertExisting(
+                    highlight, into: menu, target: self,
+                    noteAction: #selector(editLeafNote(_:)),
+                    removeAction: #selector(removeLeafHighlight(_:))
+                )
+            }
         }
         return menu
+    }
+
+    @objc private func editLeafNote(_ sender: NSMenuItem) {
+        NotificationCenter.default.post(name: .leafEditNote, object: sender.representedObject)
+    }
+
+    @objc private func removeLeafHighlight(_ sender: NSMenuItem) {
+        NotificationCenter.default.post(name: .leafRemoveHighlight, object: sender.representedObject)
     }
 
     @objc private func addLeafHighlight(_ sender: NSMenuItem) {
@@ -510,12 +565,22 @@ final class LeafTextView: NSTextView {
 }
 
 final class LeafPDFView: PDFView {
+    /// Whether the highlight with this ID has a note; nil when it is not Leaf's.
+    var noteState: ((UUID) -> Bool?)?
+
     override func menu(for event: NSEvent) -> NSMenu? {
         let menu = super.menu(for: event) ?? NSMenu()
         guard let quote = currentSelection?.string?
             .trimmingCharacters(in: .whitespacesAndNewlines),
               !quote.isEmpty
         else {
+            if let highlight = highlight(at: event) {
+                LeafAnnotationContextMenu.insertExisting(
+                    highlight, into: menu, target: self,
+                    noteAction: #selector(editLeafNote(_:)),
+                    removeAction: #selector(removeLeafHighlight(_:))
+                )
+            }
             return menu
         }
 
@@ -543,12 +608,35 @@ final class LeafPDFView: PDFView {
     @objc private func askAI() {
         NotificationCenter.default.post(name: .leafAskAI, object: nil)
     }
+
+    @objc private func editLeafNote(_ sender: NSMenuItem) {
+        NotificationCenter.default.post(name: .leafEditNote, object: sender.representedObject)
+    }
+
+    @objc private func removeLeafHighlight(_ sender: NSMenuItem) {
+        NotificationCenter.default.post(name: .leafRemoveHighlight, object: sender.representedObject)
+    }
+
+    private func highlight(at event: NSEvent) -> ExistingHighlight? {
+        let point = convert(event.locationInWindow, from: nil)
+        guard let page = page(for: point, nearest: false) else { return nil }
+        let pagePoint = convert(point, to: page)
+        for annotation in page.annotations where annotation.bounds.contains(pagePoint) {
+            guard let contents = annotation.contents, contents.hasPrefix("leaf:"),
+                  let id = UUID(uuidString: String(contents.dropFirst(5))),
+                  let hasNote = noteState?(id)
+            else { continue }
+            return ExistingHighlight(id: id, hasNote: hasNote)
+        }
+        return nil
+    }
 }
 
 struct PDFReaderView: NSViewRepresentable {
     @Environment(ReaderStore.self) private var store
     let url: URL
     let book: BookRecord
+    let annotations: [AnnotationRecord]
 
     func makeCoordinator() -> Coordinator {
         Coordinator(store: store, book: book)
@@ -583,6 +671,8 @@ struct PDFReaderView: NSViewRepresentable {
 
     func updateNSView(_ view: PDFView, context: Context) {
         context.coordinator.book = book
+        let notes = Dictionary(uniqueKeysWithValues: annotations.map { ($0.id, !$0.note.isEmpty) })
+        (view as? LeafPDFView)?.noteState = { notes[$0] }
         view.backgroundColor = store.readerTheme.nsBackground
         if store.activePDFView !== view {
             store.activePDFView = view

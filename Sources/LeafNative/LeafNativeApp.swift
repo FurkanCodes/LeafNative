@@ -9,6 +9,8 @@ extension Notification.Name {
     static let leafAddNote = Notification.Name("leaf.addNote")
     static let leafPreviousPage = Notification.Name("leaf.previousPage")
     static let leafNextPage = Notification.Name("leaf.nextPage")
+    static let leafEditNote = Notification.Name("leaf.editNote")
+    static let leafRemoveHighlight = Notification.Name("leaf.removeHighlight")
     static let leafExportNotes = Notification.Name("leaf.exportNotes")
     static let leafExportAllNotes = Notification.Name("leaf.exportAllNotes")
 }
@@ -94,7 +96,7 @@ struct LeafCommands: Commands {
             }
             .keyboardShortcut("h", modifiers: [.command, .shift])
 
-            Button("Add Note to Selection") {
+            Button("Add Note") {
                 NotificationCenter.default.post(name: .leafAddNote, object: nil)
             }
             .keyboardShortcut("n", modifiers: [.command, .shift])

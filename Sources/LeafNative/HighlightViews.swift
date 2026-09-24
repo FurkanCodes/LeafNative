@@ -27,10 +27,12 @@ struct AllHighlightsView: View {
                                 .font(.caption2)
                                 .foregroundStyle(.tertiary)
                         }
-                        Text(annotation.quote)
-                            .font(.system(.body, design: .serif))
-                            .foregroundStyle(.primary)
-                            .lineLimit(3)
+                        if !annotation.quote.isEmpty {
+                            Text(annotation.quote)
+                                .font(.system(.body, design: .serif))
+                                .foregroundStyle(.primary)
+                                .lineLimit(3)
+                        }
                         if !annotation.note.isEmpty {
                             Text(annotation.note)
                                 .font(.caption)
@@ -42,7 +44,8 @@ struct AllHighlightsView: View {
                 }
                 .buttonStyle(.plain)
                 .contextMenu {
-                    if let book = books.first(where: { $0.id == annotation.bookID }) {
+                    if !annotation.quote.isEmpty,
+                       let book = books.first(where: { $0.id == annotation.bookID }) {
                         Button("Copy Quote with Citation") {
                             store.copyQuoteWithCitation(annotation, in: book)
                         }

@@ -170,7 +170,7 @@ struct ReaderScreen: View {
                 book: book
             )
         case .pdf(let url):
-            PDFReaderView(url: url, book: book)
+            PDFReaderView(url: url, book: book, annotations: annotations)
         case .comic(let imageData):
             ComicReaderView(images: imageData)
         case .quickLook(let url):
@@ -249,6 +249,7 @@ struct ReaderScreen: View {
                     }
                 }
                 store.loadedContent = content
+                repairHighlightAnchors(in: content)
                 if case .epub(_, let entries) = content {
                     store.setContents(entries)
                 } else {
@@ -264,6 +265,26 @@ struct ReaderScreen: View {
             } catch {
                 store.loadingError = error.localizedDescription
                 store.isLoading = false
+            }
+        }
+    }
+}
+
+extension ReaderScreen {
+    /// Moves text highlights whose stored range drifted (for example after a
+    /// parser change) back onto their quoted words.
+    @MainActor
+    fileprivate func repairHighlightAnchors(in content: LoadedBookContent) {
+        let text: NSString
+        switch content {
+        case .attributedText(let value), .epub(let value, _): text = value.string as NSString
+        default: return
+        }
+        for annotation in annotations {
+            if let repaired = AnnotationAnchoring.repairedLocator(
+                annotation.locator, quote: annotation.quote, in: text
+            ) {
+                annotation.locator = repaired
             }
         }
     }
@@ -354,244 +375,6 @@ struct ReadingAppearanceView: View {
         }
         .padding(16)
         .frame(width: 300)
-    }
-}
-
-struct NotebookInspector: View {
-    @Environment(ReaderStore.self) private var store
-    let annotations: [AnnotationRecord]
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack(alignment: .center, spacing: 10) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Notebook")
-                        .font(.headline)
-                    Text("\(annotations.count) \(annotations.count == 1 ? "mark" : "marks") in this book")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                if let book = store.selectedBook {
-                    Menu {
-                        CiteMenuItems(book: book)
-                    } label: {
-                        Label("Export & Cite", systemImage: "square.and.arrow.up")
-                            .labelStyle(.iconOnly)
-                    }
-                    .menuStyle(.borderlessButton)
-                    .menuIndicator(.hidden)
-                    .fixedSize()
-                    .help("Export notes or copy a citation")
-                }
-                Button {
-                    store.inspectorVisible = false
-                } label: {
-                    Label("Hide Notebook", systemImage: "xmark")
-                        .labelStyle(.iconOnly)
-                }
-                .buttonStyle(.borderless)
-                .help("Hide Notebook")
-            }
-            .padding(.horizontal, 12)
-            .frame(height: 52)
-            .background(.bar)
-
-            Divider()
-
-            List {
-                Section {
-                    notebookTabRow(
-                        tab: 0,
-                        title: "Highlights",
-                        symbol: "highlighter",
-                        count: annotations.count
-                    )
-                    notebookTabRow(
-                        tab: 1,
-                        title: "Notes",
-                        symbol: "note.text",
-                        count: noteCount
-                    )
-                }
-
-                Section("In This Book") {
-                    if filteredAnnotations.isEmpty {
-                        VStack(alignment: .leading, spacing: 5) {
-                            Label(
-                                store.inspectorTab == 0 ? "No Highlights" : "No Notes",
-                                systemImage: store.inspectorTab == 0
-                                    ? "highlighter"
-                                    : "note.text"
-                            )
-                            .font(.caption.weight(.semibold))
-
-                            Text("Select text in the reader to begin.")
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
-                        }
-                        .foregroundStyle(.secondary)
-                        .padding(.vertical, 12)
-                        .listRowSeparator(.hidden)
-                    } else {
-                        ForEach(filteredAnnotations) { annotation in
-                            AnnotationInspectorRow(annotation: annotation)
-                        }
-                    }
-                }
-            }
-            .listStyle(.sidebar)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .background(.bar)
-    }
-
-    @ViewBuilder
-    private func notebookTabRow(
-        tab: Int,
-        title: String,
-        symbol: String,
-        count: Int
-    ) -> some View {
-        Button {
-            store.inspectorTab = tab
-        } label: {
-            HStack {
-                Label(title, systemImage: symbol)
-                Spacer()
-                Text(count, format: .number)
-                    .font(.caption2.monospacedDigit())
-                    .foregroundStyle(.tertiary)
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .listRowBackground(
-            store.inspectorTab == tab
-                ? Color.primary.opacity(0.08)
-                : Color.clear
-        )
-    }
-
-    private var filteredAnnotations: [AnnotationRecord] {
-        store.inspectorTab == 0
-            ? annotations
-            : annotations.filter { !$0.note.isEmpty }
-    }
-
-    private var noteCount: Int {
-        annotations.lazy.filter { !$0.note.isEmpty }.count
-    }
-}
-
-struct AnnotationInspectorRow: View {
-    @Environment(ReaderStore.self) private var store
-    @Environment(\.modelContext) private var modelContext
-    @Bindable var annotation: AnnotationRecord
-    @State private var isEditingNote = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Button {
-                store.navigate(to: annotation)
-            } label: {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Circle()
-                            .fill(annotation.color.swiftUIColor)
-                            .frame(width: 7, height: 7)
-                        Text(annotation.chapter)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        Text(annotation.createdAt, style: .relative)
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                    }
-
-                    Text(annotation.quote)
-                        .font(.system(.callout, design: .serif))
-                        .lineSpacing(3)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-
-                    if !isEditingNote, !annotation.note.isEmpty {
-                        Text(annotation.note)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .padding(.top, 2)
-                    }
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .help("Go to Highlight")
-            .accessibilityLabel("Go to highlight on \(annotation.chapter)")
-
-            if isEditingNote {
-                TextEditor(text: $annotation.note)
-                    .font(.caption)
-                    .frame(minHeight: 72)
-                    .scrollContentBackground(.hidden)
-                    .padding(7)
-                    .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 6))
-            }
-
-            HStack(spacing: 12) {
-                if isEditingNote {
-                    Button {
-                        isEditingNote = false
-                    } label: {
-                        Label("Done Editing", systemImage: "checkmark")
-                            .labelStyle(.iconOnly)
-                    }
-                    .buttonStyle(.borderless)
-                    .controlSize(.small)
-                    .help("Done Editing")
-                } else {
-                    Button {
-                        isEditingNote = true
-                    } label: {
-                        Label(
-                            annotation.note.isEmpty ? "Add Note" : "Edit Note",
-                            systemImage: annotation.note.isEmpty
-                                ? "note.text.badge.plus"
-                                : "square.and.pencil"
-                        )
-                        .labelStyle(.iconOnly)
-                    }
-                    .buttonStyle(.borderless)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .help(annotation.note.isEmpty ? "Add Note" : "Edit Note")
-                }
-
-                if let book = store.selectedBook {
-                    Button {
-                        store.copyQuoteWithCitation(annotation, in: book)
-                    } label: {
-                        Label("Copy Quote with Citation", systemImage: "quote.opening")
-                            .labelStyle(.iconOnly)
-                    }
-                    .buttonStyle(.borderless)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .help("Copy Quote with Citation")
-                }
-
-                Spacer()
-
-                Button(role: .destructive) {
-                    store.deleteHighlight(annotation, context: modelContext)
-                } label: {
-                    Label("Delete Highlight", systemImage: "trash")
-                        .labelStyle(.iconOnly)
-                }
-                .buttonStyle(.borderless)
-                .controlSize(.small)
-                .help("Delete Highlight")
-            }
-        }
-        .padding(.vertical, 7)
     }
 }
 

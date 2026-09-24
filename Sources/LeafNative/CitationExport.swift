@@ -462,18 +462,9 @@ struct ExportedHighlight: Sendable, Equatable {
     var createdAt: Date
 
     /// One-based PDF page number, when the highlight is in a PDF.
-    var page: Int? {
-        let parts = locator.split(separator: ":")
-        guard parts.count == 2, parts[0] == "pdf", let index = Int(parts[1]) else { return nil }
-        return index + 1
-    }
+    var page: Int? { AnnotationLocation.page(locator) }
 
-    fileprivate var position: (Int, Int) {
-        let parts = locator.split(separator: ":")
-        if parts.first == "pdf", parts.count == 2 { return (Int(parts[1]) ?? .max, 0) }
-        if parts.first == "text", parts.count == 3 { return (0, Int(parts[1]) ?? .max) }
-        return (.max, .max)
-    }
+    fileprivate var position: (Int, Int) { AnnotationLocation.position(locator) }
 }
 
 enum NotesMarkdown {
@@ -485,7 +476,9 @@ enum NotesMarkdown {
         exportedAt: Date = .now
     ) -> String {
         let key = CitationFormatter.citeKey(citation)
-        let ordered = highlights.sorted { left, right in
+        let ordered = highlights.filter {
+            !$0.quote.isEmpty || !$0.note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }.sorted { left, right in
             left.position == right.position ? left.createdAt < right.createdAt : left.position < right.position
         }
 
@@ -497,7 +490,7 @@ enum NotesMarkdown {
         citation.year.map { lines.append("year: \($0)") }
         citation.doi.map { lines.append("doi: \(yaml($0))") }
         lines.append("citekey: \(key)")
-        lines.append("highlights: \(ordered.count)")
+        lines.append("highlights: \(ordered.filter { !$0.quote.isEmpty }.count)")
         lines.append("exported: \(exportedAt.formatted(.iso8601.year().month().day()))")
         lines.append("source: Leaf Native")
         lines += ["---", "", "# \(citation.title)", "", CitationFormatter.apa(citation, markdown: true)]
@@ -510,14 +503,20 @@ enum NotesMarkdown {
                 currentChapter = chapter
             }
             lines.append("")
+            let pandoc = highlight.page.map { "[@\(key), p. \($0)]" } ?? "[@\(key)]"
+            let note = highlight.note.trimmingCharacters(in: .whitespacesAndNewlines)
+            if highlight.quote.isEmpty {
+                // A page note: the reader's own words, anchored to a location.
+                let location = highlight.page.map { " · p. \($0)" } ?? ""
+                lines += ["**Note**\(location) \(pandoc)", "", note]
+                continue
+            }
             let quoteLines = highlight.quote.trimmingCharacters(in: .whitespacesAndNewlines)
                 .components(separatedBy: .newlines)
             lines += quoteLines.map { $0.isEmpty ? ">" : "> \($0)" }
             var attribution = [highlight.color.displayName]
             if let page = highlight.page { attribution.insert("p. \(page)", at: 0) }
-            let pandoc = highlight.page.map { "[@\(key), p. \($0)]" } ?? "[@\(key)]"
             lines += [">", "> — \(attribution.joined(separator: " · ")) \(pandoc)"]
-            let note = highlight.note.trimmingCharacters(in: .whitespacesAndNewlines)
             if !note.isEmpty { lines += ["", note] }
         }
         if ordered.isEmpty { lines += ["", "_No highlights yet._"] }
