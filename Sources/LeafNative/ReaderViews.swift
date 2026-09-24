@@ -553,6 +553,7 @@ struct AnnotationInspectorRow: View {
 struct SettingsView: View {
     @Environment(ReaderStore.self) private var store
     @State private var openAIKeyDraft = ""
+    @State private var geminiKeyDraft = ""
 
     var body: some View {
         @Bindable var store = store
@@ -673,6 +674,59 @@ struct SettingsView: View {
                     }
                     TextField("Custom model ID", text: $store.chatGPTModel)
                         .textFieldStyle(.roundedBorder)
+                case .gemini:
+                    SecureField(
+                        store.geminiKeyPresent
+                            ? "Paste a new Gemini API key to replace the saved key"
+                            : "Gemini API key",
+                        text: $geminiKeyDraft
+                    )
+                    .textFieldStyle(.roundedBorder)
+                    .disabled(store.geminiConnectionStatus == .working)
+                    .onChange(of: store.geminiConnectionStatus) {
+                        if store.geminiKeyPresent,
+                           store.geminiConnectionStatus == .idle {
+                            geminiKeyDraft = ""
+                        }
+                    }
+                    .onSubmit { store.connectGemini(geminiKeyDraft) }
+                    HStack {
+                        Button(store.geminiKeyPresent ? "Replace Key" : "Connect") {
+                            store.connectGemini(geminiKeyDraft)
+                        }
+                        .disabled(geminiKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            || store.geminiConnectionStatus == .working)
+                        if store.geminiKeyPresent {
+                            Text("API key saved").foregroundStyle(.secondary)
+                            Button("Remove Key") { store.disconnectGeminiKey() }
+                                .disabled(store.geminiConnectionStatus == .working)
+                        }
+                    }
+                    Link(
+                        "Create a Gemini API key",
+                        destination: URL(string: "https://aistudio.google.com/api-keys")!
+                    )
+                    .font(.caption)
+                    if store.geminiConnectionStatus == .working {
+                        ProgressView().controlSize(.small)
+                    }
+                    if case .failed(let message) = store.geminiConnectionStatus {
+                        Text(message).font(.caption).foregroundStyle(.red)
+                    }
+                    Picker("Model", selection: $store.geminiModel) {
+                        ForEach(GeminiModelCatalog.options, id: \.id) { option in
+                            Text(option.name).tag(option.id)
+                        }
+                        if !GeminiModelCatalog.options.contains(where: { $0.id == store.geminiModel }) {
+                            Text(store.geminiModel).tag(store.geminiModel)
+                        }
+                    }
+                    TextField("Custom model ID", text: $store.geminiModel)
+                        .textFieldStyle(.roundedBorder)
+                    if store.geminiModel == GeminiModelCatalog.deepResearch {
+                        Text("Deep Research can take several minutes and incurs separate API charges per task. It uses Google's background agent and may search external sources.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                 case .appleIntelligence:
                     EmptyView()
                 }

@@ -102,6 +102,10 @@ struct AIChatView: View {
             Menu {
                 if store.aiProvider == .appleIntelligence {
                     Text("Apple Intelligence")
+                } else if store.aiProvider == .gemini {
+                    ForEach(GeminiModelCatalog.options, id: \.id) { model in
+                        Button(model.name) { store.geminiModel = model.id }
+                    }
                 } else {
                     ForEach(AIModelCatalog.options, id: \.id) { model in
                         Button(model.name) {
@@ -279,6 +283,7 @@ struct AIChatView: View {
             contentHash: store.researchContentHash
         )
         modelContext.insert(assistant)
+        let client = Result { try store.makeAIClient() }
         store.aiStatus = .working
         let selected = store.aiContextPassage
             ?? store.selectedPassage()
@@ -301,7 +306,8 @@ struct AIChatView: View {
                 )
                 try Task.checkCancellation()
                 assistant.citations = citations
-                if ResearchIntent.wantsPapers(question) {
+                if ResearchIntent.wantsPapers(question),
+                   assistant.modelID != GeminiModelCatalog.deepResearch {
                     let query = ResearchIntent.query(
                         question: question, selectedQuote: selected?.text ?? ""
                     )
@@ -327,9 +333,12 @@ struct AIChatView: View {
 
                         Answer using Markdown. Cite claims about the book using only the source IDs above, formatted [S1]. Never invent source IDs or external papers. If passages do not support an answer, say so.
                         """
-                    let client = try store.makeAIClient()
-                    for try await delta in client.stream(
-                        system: ReaderStore.aiSystemPrompt, prompt: prompt
+                    let selectedClient = try client.get()
+                    for try await delta in selectedClient.stream(
+                        system: assistant.modelID == GeminiModelCatalog.deepResearch
+                            ? ReaderStore.deepResearchSystemPrompt
+                            : ReaderStore.aiSystemPrompt,
+                        prompt: prompt
                     ) {
                         try Task.checkCancellation()
                         assistant.text += delta
@@ -383,7 +392,11 @@ private struct AIConversationMessage: View {
                         }
                     }
                 } else if message.errorText.isEmpty {
-                    ProgressView("Thinking…").controlSize(.small)
+                    ProgressView(
+                        message.modelID == GeminiModelCatalog.deepResearch
+                            ? "Researching sources… This can take several minutes."
+                            : "Thinking…"
+                    ).controlSize(.small)
                 }
                 if !message.errorText.isEmpty {
                     Label(message.errorText, systemImage: "exclamationmark.triangle")

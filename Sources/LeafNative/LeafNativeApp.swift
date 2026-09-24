@@ -37,7 +37,7 @@ struct LeafNativeApp: App {
         Settings {
             SettingsView()
                 .environment(store)
-                .frame(width: 480, height: 320)
+                .frame(width: 540, height: 480)
         }
     }
 }

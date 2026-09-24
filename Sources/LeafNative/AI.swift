@@ -14,6 +14,7 @@ enum AIProvider: String, CaseIterable, Identifiable {
     case appleIntelligence
     case openAI
     case chatGPT
+    case gemini
 
     var id: String { rawValue }
 
@@ -22,6 +23,7 @@ enum AIProvider: String, CaseIterable, Identifiable {
         case .appleIntelligence: "Apple Intelligence (on-device)"
         case .openAI: "OpenAI API"
         case .chatGPT: "ChatGPT account"
+        case .gemini: "Gemini"
         }
     }
 
@@ -33,6 +35,8 @@ enum AIProvider: String, CaseIterable, Identifiable {
             "Connect with an OpenAI Platform API key. API usage is billed separately from ChatGPT."
         case .chatGPT:
             "Use your ChatGPT subscription through the Codex sign-in flow. This integration depends on Codex's private backend."
+        case .gemini:
+            "Connect with a Gemini API key. Usage belongs to the key's Google Cloud project and is separate from Gemini app subscriptions."
         }
     }
 }

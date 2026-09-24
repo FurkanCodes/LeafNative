@@ -163,6 +163,17 @@ final class ReaderStore {
     var chatGPTAuthStatus: AIStatus = .idle
     var openAIKeyPresent = UserDefaults.standard.bool(forKey: "leaf.ai.openAIConnected")
     var openAIConnectionStatus: AIStatus = .idle
+    var geminiKeyPresent = UserDefaults.standard.bool(forKey: "leaf.ai.geminiKeyConnected")
+    var geminiConnectionStatus: AIStatus = .idle
+
+    init() {
+        // Remove credentials from the discontinued Google OAuth integration.
+        KeychainStore.remove(account: "gemini-oauth-client")
+        KeychainStore.remove(account: "gemini-oauth-credentials")
+        UserDefaults.standard.removeObject(forKey: "leaf.ai.geminiAuthMethod")
+        UserDefaults.standard.removeObject(forKey: "leaf.ai.geminiOAuthConfigured")
+        UserDefaults.standard.removeObject(forKey: "leaf.ai.geminiSignedIn")
+    }
 
     private enum Defaults {
         static let fontSize = "leaf.appearance.fontSize"
@@ -173,6 +184,7 @@ final class ReaderStore {
         static let aiProvider = "leaf.ai.provider"
         static let openAIModel = "leaf.ai.openAIModel"
         static let chatGPTModel = "leaf.ai.chatGPTModel"
+        static let geminiModel = "leaf.ai.geminiModel"
     }
 
     var aiProvider: AIProvider {
@@ -219,6 +231,19 @@ final class ReaderStore {
         set {
             withMutation(keyPath: \.chatGPTModel) {
                 UserDefaults.standard.set(newValue, forKey: Defaults.chatGPTModel)
+            }
+        }
+    }
+
+    var geminiModel: String {
+        get {
+            access(keyPath: \.geminiModel)
+            return UserDefaults.standard.string(forKey: Defaults.geminiModel)
+                ?? GeminiModelCatalog.defaultModel
+        }
+        set {
+            withMutation(keyPath: \.geminiModel) {
+                UserDefaults.standard.set(newValue, forKey: Defaults.geminiModel)
             }
         }
     }
@@ -701,19 +726,52 @@ final class ReaderStore {
         }
     }
 
+    func connectGemini(_ key: String) {
+        let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, geminiConnectionStatus != .working else { return }
+        geminiConnectionStatus = .working
+        Task {
+            do {
+                try await GeminiClient.validate(auth: .apiKey(trimmed))
+                guard KeychainStore.set(trimmed, account: "gemini-api-key") else {
+                    throw AIError.authFailed("Could not save the Gemini API key in Keychain.")
+                }
+                geminiKeyPresent = true
+                UserDefaults.standard.set(true, forKey: "leaf.ai.geminiKeyConnected")
+                geminiConnectionStatus = .idle
+                showToast("Gemini API key connected")
+            } catch {
+                geminiConnectionStatus = .failed(error.localizedDescription)
+            }
+        }
+    }
+
+    func disconnectGeminiKey() {
+        if KeychainStore.remove(account: "gemini-api-key") {
+            geminiKeyPresent = false
+            UserDefaults.standard.set(false, forKey: "leaf.ai.geminiKeyConnected")
+            geminiConnectionStatus = .idle
+        } else {
+            geminiConnectionStatus = .failed("Could not remove the Gemini API key from Keychain.")
+        }
+    }
+
     func refreshAIConnectionStatus() {
         Task { [weak self] in
             let presence = await Task.detached {
                 (
                     ChatGPTAuth.credentials != nil,
-                    KeychainStore.get(account: "openai-api-key") != nil
+                    KeychainStore.get(account: "openai-api-key") != nil,
+                    KeychainStore.get(account: "gemini-api-key") != nil
                 )
             }.value
             guard let self else { return }
             chatGPTSignedIn = presence.0
             openAIKeyPresent = presence.1
+            geminiKeyPresent = presence.2
             UserDefaults.standard.set(presence.0, forKey: "leaf.ai.chatGPTConnected")
             UserDefaults.standard.set(presence.1, forKey: "leaf.ai.openAIConnected")
+            UserDefaults.standard.set(presence.2, forKey: "leaf.ai.geminiKeyConnected")
         }
     }
 
@@ -746,6 +804,13 @@ final class ReaderStore {
         relevant, and keep responses under 300 words unless asked for more.
         """
 
+    static let deepResearchSystemPrompt = """
+        You are a research assistant inside Leaf Native. Produce a useful, detailed research report. \
+        Distinguish what the open document says from findings in external sources. \
+        Cite the supplied document passage IDs for claims about the book and link external sources. \
+        Never invent passage IDs, papers, or URLs.
+        """
+
     func makeAIClient() throws -> AIClient {
         switch aiProvider {
         case .openAI:
@@ -775,6 +840,16 @@ final class ReaderStore {
                 throw AIError.requestFailed("Choose a ChatGPT model in Settings → AI.")
             }
             return ChatGPTClient(credentials: credentials, model: model)
+        case .gemini:
+            let model = geminiModel.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !model.isEmpty else {
+                throw AIError.requestFailed("Choose a Gemini model in Settings → AI.")
+            }
+            guard let key = KeychainStore.get(account: "gemini-api-key") else {
+                geminiKeyPresent = false
+                throw AIError.authFailed("Add a Gemini API key in Settings → AI.")
+            }
+            return GeminiClient(auth: .apiKey(key), model: model)
         case .appleIntelligence:
             #if canImport(FoundationModels)
             if #available(macOS 26.0, *),
@@ -791,6 +866,7 @@ final class ReaderStore {
         case .appleIntelligence: "Apple Intelligence"
         case .openAI: AIModelCatalog.options.first(where: { $0.id == openAIModel })?.name ?? openAIModel
         case .chatGPT: AIModelCatalog.options.first(where: { $0.id == chatGPTModel })?.name ?? chatGPTModel
+        case .gemini: GeminiModelCatalog.label(for: geminiModel)
         }
     }
 
@@ -799,6 +875,7 @@ final class ReaderStore {
         case .appleIntelligence: "apple-intelligence"
         case .openAI: openAIModel
         case .chatGPT: chatGPTModel
+        case .gemini: geminiModel
         }
     }
 

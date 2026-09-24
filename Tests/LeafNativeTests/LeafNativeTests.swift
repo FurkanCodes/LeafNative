@@ -230,6 +230,50 @@ final class ChatGPTClientTests: XCTestCase {
     }
 }
 
+final class GeminiClientTests: XCTestCase {
+    func testModelRequestIsStatelessAndUsesSelectedModel() throws {
+        let client = GeminiClient(auth: .apiKey("test-key"), model: "gemini-3.8-flash")
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(
+            with: client.modelRequestBody(system: "Check evidence", prompt: "Summarize")
+        ) as? [String: Any])
+        XCTAssertEqual(body["model"] as? String, "gemini-3.8-flash")
+        XCTAssertEqual(body["input"] as? String, "Summarize")
+        XCTAssertEqual(body["system_instruction"] as? String, "Check evidence")
+        XCTAssertEqual(body["stream"] as? Bool, true)
+        XCTAssertEqual(body["store"] as? Bool, false)
+    }
+
+    func testAPIKeyRequestHeader() async throws {
+        let keyRequest = try await GeminiClient(auth: .apiKey("test-key"), model: "gemini-3.8-flash")
+            .request(path: "/models?pageSize=1", method: "GET")
+        XCTAssertEqual(keyRequest.value(forHTTPHeaderField: "x-goog-api-key"), "test-key")
+    }
+
+    func testInteractionsStreamAcceptsOnlyModelOutputText() throws {
+        var parser = GeminiStreamParser()
+        XCTAssertNil(try parser.consume("data: {\"event_type\":\"step.start\",\"index\":0,\"step\":{\"type\":\"thought\"}}"))
+        XCTAssertNil(try parser.consume("data: {\"event_type\":\"step.delta\",\"index\":0,\"delta\":{\"type\":\"text\",\"text\":\"private reasoning\"}}"))
+        XCTAssertNil(try parser.consume("data: {\"event_type\":\"step.start\",\"index\":1,\"step\":{\"type\":\"model_output\"}}"))
+        XCTAssertEqual(try parser.consume("data: {\"event_type\":\"step.delta\",\"index\":1,\"delta\":{\"type\":\"text\",\"text\":\"Evidence\"}}"), "Evidence")
+        XCTAssertNil(try parser.consume("data: {\"event_type\":\"interaction.completed\"}"))
+        XCTAssertTrue(parser.receivedText)
+        XCTAssertTrue(parser.completed)
+    }
+
+    func testDeepResearchReportExtraction() throws {
+        let result = try GeminiInteraction.parse(Data("""
+            {"id":"v1_abc","status":"completed","steps":[
+              {"type":"thought","content":[{"type":"text","text":"Hidden"}]},
+              {"type":"model_output","content":[{"type":"text","text":"Finding one.",
+                "annotations":[{"type":"url_citation","title":"Study A","url":"https://example.org/study"}]},
+                {"type":"text","text":"Finding two."}]}
+            ]}
+            """.utf8))
+        XCTAssertEqual(result.id, "v1_abc")
+        XCTAssertEqual(result.outputText, "Finding one.\n\nFinding two.\n\n### Sources\n- [Study A](https://example.org/study)")
+    }
+}
+
 final class ReaderFormatTests: XCTestCase {
     func testExtensionMapping() {
         XCTAssertEqual(

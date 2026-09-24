@@ -76,6 +76,12 @@ open "dist/Leaf Native.app"
 
 The script builds and ad-hoc signs a local app bundle. Run it again after source changes before reopening the app.
 
+### Connect Gemini
+
+Choose **Gemini** in Settings → AI Assistant. Create a key in [Google AI Studio](https://aistudio.google.com/api-keys), paste it into Leaf, and select a model. The key is stored in macOS Keychain and its Google Cloud project owns the API quota and billing.
+
+A Gemini app subscription does not cover Gemini API requests. **Gemini Deep Research** is a separate background agent that may take several minutes and incur higher per-task costs. Leaf cancels a running agent when you press Stop and requests deletion of its remote interaction after completion or cancellation.
+
 To create the DMG and ZIP used for a release:
 
 ```bash
@@ -98,7 +104,7 @@ ZIPFoundation unpacks EPUB, DOCX, and CBZ containers. swift-markdown parses assi
 
 ## Privacy
 
-Leaf has no Leaf account, analytics, advertising, or Leaf-operated cloud backend. Imported books, reading data, and conversations are stored locally on your Mac. Apple Intelligence processes assistant requests on device. If you select OpenAI API or ChatGPT account, the question and retrieved book passages are sent to OpenAI. Paper searches send the search terms to OpenAlex and DOI lookups to Crossref; metadata confirmation does not verify a paper's findings. API keys and ChatGPT tokens are stored in the macOS Keychain. The ChatGPT account integration uses Codex OAuth and its private backend, so OpenAI may change or restrict it.
+Leaf has no Leaf account, analytics, advertising, or Leaf-operated cloud backend. Imported books, reading data, and conversations are stored locally on your Mac. Apple Intelligence processes assistant requests on device. If you select OpenAI API or ChatGPT account, the question and retrieved book passages are sent to OpenAI. If you select Gemini, those passages and questions are sent to Google's Gemini API; standard model requests disable server-side interaction storage. Deep Research requires temporary background interaction storage at Google, which Leaf requests to delete when the task finishes or is stopped. Paper searches send the search terms to OpenAlex and DOI lookups to Crossref; metadata confirmation does not verify a paper's findings. API keys and OAuth tokens are stored in the macOS Keychain. The ChatGPT account integration uses Codex OAuth and its private backend, so OpenAI may change or restrict it.
 
 ## License
 
