@@ -1,25 +1,32 @@
-# Leaf Native 1.4.0
+# Leaf Native 1.5.0
 
-A notebook that works the way you study, notes that leave with you, and a research companion that finds the right passages.
+A calmer workspace: a notebook organized like the book, a sidebar that shows where you are, and highlighting right where you select.
 
 ## What's new
 
-### Note-taking
-- **⇧⌘N** highlights your selection and opens a note editor right under it. With nothing selected, it starts a note about the current page.
-- Right-click any highlight in the book to **Add Note**, **Edit Note**, or **Remove Highlight** — in PDFs and text alike.
-- The notebook now lists highlights and notes in reading order, with an **All | Notes** filter, a visible **Add note** on every highlight, and a **New Note** button. Notes save as you type; press **Done**, ⌘↩, or Esc to finish.
-- Highlights whose position drifted are repaired automatically when a book opens.
+### Notebook
+- Highlights and notes are **grouped by chapter or section**, with headers that stay in view and collapse, and a **"You're reading here"** marker at your place in the book.
+- **Search** your highlights and notes, and **filter** by notes or by color.
+- Quotes carry a wash of their highlight color, and each note sits in its own box beneath its quote, with Markdown formatting.
+- Edit notes in place: **Return** saves, **Shift-Return** starts a new line, and **Esc** puts the note back as it was.
+- Move through entries with **↑/↓**, press **Return** to edit and **Delete** to remove, then **Undo** from the confirmation if you change your mind.
+- New highlights and notes scroll into view as you add them.
+- Notebook and Ask AI now share a single header.
 
-### Export and citations
-- **Export Notes as Markdown** (⇧⌘E) writes your highlights and notes with YAML front matter, an APA reference, chapter headings, and Pandoc citations like `[@key, p. 12]` — ready for Obsidian, Zettlr, or Pandoc.
-- **Export All Notes** creates a Markdown file per book plus a shared `Leaf Library.bib`.
-- **Copy APA Reference**, **Copy BibTeX**, and **Copy Quote with Citation**. Leaf finds a paper's DOI, confirms it matches the document, and looks it up on Crossref (or doi.org for arXiv and other registries). You can also set a DOI yourself.
+### Highlighting
+- Select text and a bar appears above the first word with the three highlight colors, **Note**, and **Ask AI** — in PDFs and books alike.
+- **Ask AI About Selection** is in the Reading menu (⇧⌘A).
+- A leaner toolbar keeps the page in front.
 
-### Research companion
-- Passage retrieval understands meaning, not just matching words — "why do people follow the crowd?" now finds passages about conformity. It runs entirely on your Mac.
-- Fixed PDFs where only one passage per page could reach the assistant; citations now name the section, e.g. "Page 12 · Methods".
-- Paper results open their DOI pages, offer **Open paper**, **Copy citation**, and **Open PDF** when available, and show matching abstract terms.
-- Answers use clearer headings and lists, and document citations and external sources sit in separate expandable sections.
+### Sidebar
+- A **Now Reading** card shows the open book and your progress.
+- **Contents** marks the sections you've read and the one you're in, with a count of highlights and notes in each.
+
+## Fixes
+- Leaf now reopens a book exactly where you left off. Previously the saved place slipped back a little each time, and the current section could be wrong.
+- PDF highlights keep their light tint after reopening instead of coming back at full strength. Existing highlights are shown with the lighter tint too.
+- Section titles typeset in capitals read naturally ("Make a Place for Return").
+- The reader footer names the section you're in.
 
 ## Downloads
 
