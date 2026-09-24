@@ -27,7 +27,40 @@ struct PaperResult: Codable, Identifiable, Equatable, Sendable {
     var authors: String
     var year: Int?
     var landingURL: URL
+    var pdfURL: URL?
+    var relevanceNote: String?
     var metadataVerified: Bool
+}
+
+struct ExternalResearchSource: Identifiable, Equatable {
+    var id: URL { url }
+    let title: String
+    let url: URL
+}
+
+enum ResearchSourceLinks {
+    static func split(_ text: String) -> (answer: String, sources: [ExternalResearchSource]) {
+        let marker = "\n\n### Sources\n"
+        guard let range = text.range(of: marker, options: .backwards) else {
+            return (text, [])
+        }
+        let lines = text[range.upperBound...].split(separator: "\n", omittingEmptySubsequences: true)
+        guard !lines.isEmpty else { return (text, []) }
+        var sources: [ExternalResearchSource] = []
+        for line in lines {
+            guard line.hasPrefix("- ["), line.hasSuffix(")"),
+                  let separator = line.range(of: "](", options: .backwards),
+                  let url = URL(string: String(line[separator.upperBound..<line.index(before: line.endIndex)])),
+                  ["https", "http"].contains(url.scheme?.lowercased() ?? "")
+            else { return (text, []) }
+            let title = String(line[line.index(line.startIndex, offsetBy: 3)..<separator.lowerBound])
+            guard !title.isEmpty else { return (text, []) }
+            if !sources.contains(where: { $0.url == url }) {
+                sources.append(.init(title: title, url: url))
+            }
+        }
+        return (String(text[..<range.lowerBound]), sources)
+    }
 }
 
 @Model

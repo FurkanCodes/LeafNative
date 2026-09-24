@@ -19,6 +19,35 @@ private final class PaperUnavailableURLProtocol: URLProtocol {
     override func stopLoading() {}
 }
 
+private final class PaperMetadataURLProtocol: URLProtocol {
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        let isOpenAlex = request.url?.host == "api.openalex.org"
+        let json = isOpenAlex
+            ? """
+              {"results":[{"display_name":"Study A","doi":"https://doi.org/10.1234/study",
+                "publication_year":2024,"authorships":[],
+                "best_oa_location":{"pdf_url":"https://example.org/study.pdf"},
+                "abstract_inverted_index":{"study":[0],"findings":[1]}}]}
+              """
+            : """
+              {"message":{"DOI":"10.1234/study","title":["Study A"],
+                "author":[{"given":"Ada","family":"Lovelace"}],
+                "published":{"date-parts":[[2024]]}}}
+              """
+        let response = HTTPURLResponse(
+            url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil
+        )!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data(json.utf8))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
+}
+
 final class ResearchCompanionTests: XCTestCase {
     func testCurrentPassageWinsOverWholeDocumentMatches() async {
         let index = ResearchIndex()
@@ -65,6 +94,35 @@ final class ResearchCompanionTests: XCTestCase {
         XCTAssertTrue(rendered.contains("[S99]"))
     }
 
+    func testResearchSourcesMoveOutOfAnswerWithoutLosingOtherMarkdown() {
+        let text = "## Findings\nUseful result.\n\n### Sources\n- [Study A](https://example.org/a)\n- [Study B](https://example.org/b)"
+        let sections = ResearchSourceLinks.split(text)
+        XCTAssertEqual(sections.answer, "## Findings\nUseful result.")
+        XCTAssertEqual(sections.sources.map(\.title), ["Study A", "Study B"])
+        XCTAssertEqual(ResearchSourceLinks.split("### Sources\n- invalid").answer, "### Sources\n- invalid")
+    }
+
+    func testPaperSearchIncludesAvailableOpenAccessPDF() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [PaperMetadataURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        let papers = try await PaperSearch(session: session).search(query: "study")
+        XCTAssertEqual(papers.count, 1)
+        XCTAssertEqual(papers.first?.pdfURL?.absoluteString, "https://example.org/study.pdf")
+        XCTAssertEqual(papers.first?.authors, "Ada Lovelace")
+        XCTAssertEqual(papers.first?.relevanceNote, "Abstract mentions: study")
+    }
+
+    func testSavedPaperWithoutPDFFieldStillDecodes() throws {
+        let json = """
+            {"doi":"10.1234/study","title":"Study A","authors":"Ada Lovelace",
+             "year":2024,"landingURL":"https://doi.org/10.1234/study","metadataVerified":true}
+            """
+        let paper = try JSONDecoder().decode(PaperResult.self, from: Data(json.utf8))
+        XCTAssertNil(paper.pdfURL)
+        XCTAssertNil(paper.relevanceNote)
+    }
+
     @MainActor
     func testChangedDocumentInvalidatesPassageNavigation() throws {
         let oldHash = try XCTUnwrap(ResearchContentHash.value(
@@ -104,6 +162,15 @@ final class ResearchCompanionTests: XCTestCase {
         XCTAssertEqual(PaperSearch.normalizedDOI("https://doi.org/10.1234/ABC"), "10.1234/abc")
         XCTAssertTrue(PaperSearch.titleMatches("The basics of brain development", "Basics of Brain Development, The"))
         XCTAssertFalse(PaperSearch.titleMatches("The basics of brain development", "Completely different topic"))
+    }
+
+    func testPaperQueryUsesReadingForThisPart() {
+        let query = ResearchIntent.query(
+            question: "Find research papers related to this part",
+            selectedQuote: "Neuroplasticity changes the brain. Neuroplasticity supports learning."
+        )
+        XCTAssertTrue(query.contains("neuroplasticity"))
+        XCTAssertFalse(query.contains("part"))
     }
 
     func testPaperSearchReportsServiceFailure() async {

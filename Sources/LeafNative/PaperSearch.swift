@@ -17,13 +17,17 @@ enum ResearchIntent {
     }
 
     static func query(question: String, selectedQuote: String) -> String {
-        let source = question.lowercased().contains("this excerpt")
-            || question.lowercased().contains("this passage")
-            ? selectedQuote : question
+        let referringPhrases = [
+            "this excerpt", "this passage", "this part", "this section",
+            "this page", "this chapter", "related to this",
+        ]
+        let refersToReading = referringPhrases.contains { question.lowercased().contains($0) }
+        let source = refersToReading && !selectedQuote.isEmpty ? selectedQuote : question
         let stop: Set<String> = [
             "about", "find", "paper", "papers", "study", "studies", "research",
             "researches", "related", "regarding", "this", "that", "these", "those",
-            "excerpt", "passage", "please", "could", "would", "with", "from", "what",
+            "excerpt", "passage", "part", "section", "page", "chapter", "book",
+            "document", "please", "could", "would", "with", "from", "what",
             "does", "show", "link", "them", "sources", "journal", "articles",
             "there", "their", "have", "been", "were", "when", "where", "which",
             "into", "then", "than", "some", "most", "many", "first", "next",
@@ -61,10 +65,13 @@ actor PaperSearch {
                 struct Author: Decodable { let display_name: String? }
                 let author: Author?
             }
+            struct Location: Decodable { let pdf_url: String? }
             let display_name: String
             let doi: String?
             let publication_year: Int?
             let authorships: [Authorship]?
+            let best_oa_location: Location?
+            let abstract_inverted_index: [String: [Int]]?
         }
         let results: [Work]
     }
@@ -101,7 +108,7 @@ actor PaperSearch {
         components.queryItems = [
             .init(name: "search", value: query),
             .init(name: "per_page", value: "10"),
-            .init(name: "select", value: "display_name,doi,publication_year,authorships"),
+            .init(name: "select", value: "display_name,doi,publication_year,authorships,best_oa_location,abstract_inverted_index"),
         ]
         guard let url = components.url else { return [] }
         var request = URLRequest(url: url)
@@ -121,12 +128,15 @@ actor PaperSearch {
                   let confirmed = try? await confirm(doi: doi, title: work.display_name)
             else { continue }
             guard let landingURL = URL(string: "https://doi.org/\(doi)") else { continue }
+            let pdfURL = work.best_oa_location?.pdf_url.flatMap(URL.init(string:))
             results.append(PaperResult(
                 doi: doi,
                 title: confirmed.title,
                 authors: confirmed.authors,
                 year: confirmed.year,
                 landingURL: landingURL,
+                pdfURL: ["https", "http"].contains(pdfURL?.scheme?.lowercased() ?? "") ? pdfURL : nil,
+                relevanceNote: Self.abstractMatch(work.abstract_inverted_index, query: query),
                 metadataVerified: true
             ))
         }
@@ -146,7 +156,7 @@ actor PaperSearch {
               let confirmed = work.title?.first,
               Self.titleMatches(title, confirmed)
         else { return nil }
-        let authors = (work.author ?? []).prefix(3).map { author in
+        let authors = (work.author ?? []).map { author in
             [author.given, author.family].compactMap { $0 }.joined(separator: " ")
         }.filter { !$0.isEmpty }.joined(separator: ", ")
         return ConfirmedPaper(
@@ -168,5 +178,17 @@ actor PaperSearch {
         let b = Set(second.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init))
         guard !a.isEmpty, !b.isEmpty else { return false }
         return Double(a.intersection(b).count) / Double(min(a.count, b.count)) >= 0.7
+    }
+
+    static func abstractMatch(_ abstract: [String: [Int]]?, query: String) -> String? {
+        guard let abstract else { return nil }
+        let abstractWords = Set(abstract.keys.map { $0.lowercased() })
+        let queryWords = query.lowercased()
+            .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+            .map(String.init)
+        let matches = Array(NSOrderedSet(array: queryWords.filter { abstractWords.contains($0) }))
+            .compactMap { $0 as? String }
+        guard !matches.isEmpty else { return nil }
+        return "Abstract mentions: " + matches.prefix(3).joined(separator: ", ")
     }
 }

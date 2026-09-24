@@ -85,7 +85,7 @@ A Gemini app subscription does not cover Gemini API requests. **Gemini Deep Rese
 To create the DMG and ZIP used for a release:
 
 ```bash
-./scripts/build-release.sh 1.0.0
+./scripts/build-release.sh 1.3.0
 ```
 
 ## Native architecture
