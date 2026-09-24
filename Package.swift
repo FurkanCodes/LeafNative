@@ -14,12 +14,16 @@ let package = Package(
         .package(
             url: "https://github.com/weichsel/ZIPFoundation.git",
             exact: "0.9.20"
-        )
+        ),
+        .package(
+            url: "https://github.com/swiftlang/swift-markdown.git",
+            exact: "0.8.0"
+        ),
     ],
     targets: [
         .executableTarget(
             name: "LeafNative",
-            dependencies: ["ZIPFoundation"],
+            dependencies: ["ZIPFoundation", .product(name: "Markdown", package: "swift-markdown")],
             path: "Sources/LeafNative"
         ),
         .testTarget(

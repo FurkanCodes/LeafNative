@@ -26,7 +26,8 @@ Leaf keeps the book at the center. Its three-pane workspace gives the library, r
 ## Why Leaf
 
 - **Native by design** — SwiftUI, AppKit, PDFKit, and SwiftData; no Electron, WebView, or browser shell.
-- **A notebook beside the page** — collect highlights and notes without breaking your reading flow.
+- **Notebook or AI beside the page** — collect notes, ask about a selection, and follow citations back to the document without leaving the reader.
+- **Research companion** — local conversations per book, streamed Markdown answers, passage retrieval, and scholarly paper discovery with DOI metadata checked against Crossref.
 - **Fast, deliberate highlighting** — select text, choose Amber, Sage, or Rose, and keep reading.
 - **Highlights that lead somewhere** — click a saved highlight to jump directly back to its passage.
 - **Real PDF annotations** — PDF highlights are written into the document and can be removed from Leaf.
@@ -69,16 +70,11 @@ Leaf requires macOS 15 or later and Xcode 26, or another compatible Swift 6.2 to
 ```bash
 git clone https://github.com/FurkanCodes/LeafNative.git
 cd LeafNative
-swift build
-swift run Leaf
-```
-
-To create a signed local app bundle:
-
-```bash
 ./scripts/build-app.sh
 open "dist/Leaf Native.app"
 ```
+
+The script builds and ad-hoc signs a local app bundle. Run it again after source changes before reopening the app.
 
 To create the DMG and ZIP used for a release:
 
@@ -95,15 +91,15 @@ To create the DMG and ZIP used for a release:
 | PDF rendering and annotations | PDFKit |
 | Library and reading state | SwiftData |
 | Container formats | ZIPFoundation |
+| Assistant Markdown | swift-markdown |
 | System document fallback | Quick Look |
 
-ZIPFoundation is the project's only third-party package dependency. It is used to unpack EPUB, DOCX, and CBZ containers.
+ZIPFoundation unpacks EPUB, DOCX, and CBZ containers. swift-markdown parses assistant responses for native rendering.
 
 ## Privacy
 
-Leaf has no account, analytics, advertising, or cloud backend. Imported books and reading data are stored locally on your Mac.
+Leaf has no Leaf account, analytics, advertising, or Leaf-operated cloud backend. Imported books, reading data, and conversations are stored locally on your Mac. Apple Intelligence processes assistant requests on device. If you select OpenAI API or ChatGPT account, the question and retrieved book passages are sent to OpenAI. Paper searches send the search terms to OpenAlex and DOI lookups to Crossref; metadata confirmation does not verify a paper's findings. API keys and ChatGPT tokens are stored in the macOS Keychain. The ChatGPT account integration uses Codex OAuth and its private backend, so OpenAI may change or restrict it.
 
 ## License
 
 This repository does not currently include an open-source license.
-

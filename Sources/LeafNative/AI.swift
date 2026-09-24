@@ -2,6 +2,7 @@ import AppKit
 import CryptoKit
 import Foundation
 import Network
+import Security
 
 #if canImport(FoundationModels)
 import FoundationModels
@@ -19,8 +20,8 @@ enum AIProvider: String, CaseIterable, Identifiable {
     var displayName: String {
         switch self {
         case .appleIntelligence: "Apple Intelligence (on-device)"
-        case .openAI: "OpenAI (API key)"
-        case .chatGPT: "ChatGPT account (experimental)"
+        case .openAI: "OpenAI API"
+        case .chatGPT: "ChatGPT account"
         }
     }
 
@@ -29,16 +30,14 @@ enum AIProvider: String, CaseIterable, Identifiable {
         case .appleIntelligence:
             "Free, private, offline. Requires macOS 26 and Apple Intelligence."
         case .openAI:
-            "Paste an API key from platform.openai.com. Usage is billed by OpenAI."
+            "Connect with an OpenAI Platform API key. API usage is billed separately from ChatGPT."
         case .chatGPT:
-            "Signs in with your ChatGPT account. Experimental — relies on "
-                + "undocumented OpenAI internals and may stop working."
+            "Use your ChatGPT subscription through the Codex sign-in flow. This integration depends on Codex's private backend."
         }
     }
 }
 
 enum AIError: LocalizedError {
-    case notConfigured
     case appleIntelligenceUnavailable
     case requestFailed(String)
     case badResponse
@@ -47,8 +46,6 @@ enum AIError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .notConfigured:
-            "Configure an AI provider in Settings first."
         case .appleIntelligenceUnavailable:
             "Apple Intelligence is not available on this Mac."
         case .requestFailed(let detail):
@@ -56,7 +53,7 @@ enum AIError: LocalizedError {
         case .badResponse:
             "The AI service returned an unexpected response."
         case .authCancelled:
-            "Sign-in was cancelled."
+            "Sign-in was cancelled or timed out."
         case .authFailed(let detail):
             detail
         }
@@ -83,7 +80,8 @@ enum KeychainStore {
         return String(data: data, encoding: .utf8)
     }
 
-    static func set(_ value: String, account: String) {
+    @discardableResult
+    static func set(_ value: String, account: String) -> Bool {
         let data = Data(value.utf8)
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -91,24 +89,26 @@ enum KeychainStore {
             kSecAttrAccount as String: account,
         ]
         if SecItemCopyMatching(query as CFDictionary, nil) == errSecSuccess {
-            SecItemUpdate(
+            return SecItemUpdate(
                 query as CFDictionary,
                 [kSecValueData as String: data] as CFDictionary
-            )
+            ) == errSecSuccess
         } else {
             var insert = query
             insert[kSecValueData as String] = data
-            SecItemAdd(insert as CFDictionary, nil)
+            return SecItemAdd(insert as CFDictionary, nil) == errSecSuccess
         }
     }
 
-    static func remove(account: String) {
+    @discardableResult
+    static func remove(account: String) -> Bool {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
         ]
-        SecItemDelete(query as CFDictionary)
+        let status = SecItemDelete(query as CFDictionary)
+        return status == errSecSuccess || status == errSecItemNotFound
     }
 }
 
@@ -120,50 +120,84 @@ enum AIStatus: Equatable {
     case failed(String)
 }
 
-struct AIMessage: Identifiable, Equatable {
-    enum Role { case user, assistant }
-
-    let id = UUID()
-    let role: Role
-    let text: String
-}
-
 // MARK: - Clients
 
 protocol AIClient: Sendable {
     func respond(system: String?, prompt: String) async throws -> String
+    func stream(system: String?, prompt: String) -> AsyncThrowingStream<String, Error>
+}
+
+extension AIClient {
+    func stream(system: String?, prompt: String) -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    continuation.yield(try await respond(system: system, prompt: prompt))
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
 }
 
 struct OpenAIClient: AIClient {
     var apiKey: String
-    var model: String = "gpt-4o-mini"
+    var model: String = AIModelCatalog.defaultModel
+    var session: URLSession = .shared
 
     struct Request: Encodable {
-        struct Message: Encodable {
-            let role: String
-            let content: String
-        }
         let model: String
-        let messages: [Message]
+        let instructions: String?
+        let input: String
+        let store = false
+    }
+
+    private struct StreamRequest: Encodable {
+        let model: String
+        let instructions: String?
+        let input: String
+        let store = false
+        let stream = true
     }
 
     struct Response: Decodable {
-        struct Choice: Decodable {
-            struct Message: Decodable { let content: String }
-            let message: Message
+        struct Item: Decodable {
+            struct Content: Decodable {
+                let type: String
+                let text: String?
+            }
+            let type: String
+            let content: [Content]?
         }
-        let choices: [Choice]
+        let output: [Item]
+
+        var text: String? {
+            let parts = output
+                .filter { $0.type == "message" }
+                .flatMap { $0.content ?? [] }
+                .compactMap { $0.type == "output_text" ? $0.text : nil }
+            return parts.isEmpty ? nil : parts.joined(separator: "\n")
+        }
+    }
+
+    private struct APIError: Decodable {
+        struct Detail: Decodable { let message: String }
+        let error: Detail
+    }
+
+    func validateKey() async throws {
+        var request = URLRequest(url: URL(string: "https://api.openai.com/v1/models")!)
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        let (data, response) = try await session.data(for: request)
+        try Self.check(response: response, data: data)
     }
 
     func respond(system: String?, prompt: String) async throws -> String {
-        var messages = [Request.Message(role: "user", content: prompt)]
-        if let system, !system.isEmpty {
-            messages.insert(
-                Request.Message(role: "system", content: system), at: 0
-            )
-        }
         var request = URLRequest(
-            url: URL(string: "https://api.openai.com/v1/chat/completions")!
+            url: URL(string: "https://api.openai.com/v1/responses")!
         )
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -171,23 +205,67 @@ struct OpenAIClient: AIClient {
             "Bearer \(apiKey)", forHTTPHeaderField: "Authorization"
         )
         request.httpBody = try JSONEncoder().encode(
-            Request(model: model, messages: messages)
+            Request(model: model, instructions: system, input: prompt)
         )
 
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard (response as? HTTPURLResponse)?.statusCode == 200 else {
-            let detail =
-                String(data: data, encoding: .utf8)?.prefix(300) ?? "no details"
-            throw AIError.requestFailed(
-                "OpenAI request failed: \(detail)"
-            )
-        }
-        guard let text = try JSONDecoder()
-            .decode(Response.self, from: data)
-            .choices.first?.message.content
+        let (data, response) = try await session.data(for: request)
+        try Self.check(response: response, data: data)
+        guard let text = try JSONDecoder().decode(Response.self, from: data).text
         else { throw AIError.badResponse }
         return text
     }
+
+    func stream(system: String?, prompt: String) -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    var request = URLRequest(url: URL(string: "https://api.openai.com/v1/responses")!)
+                    request.httpMethod = "POST"
+                    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                    request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+                    request.httpBody = try JSONEncoder().encode(
+                        StreamRequest(model: model, instructions: system, input: prompt)
+                    )
+                    let (bytes, response) = try await session.bytes(for: request)
+                    guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+                        throw AIError.requestFailed("OpenAI request failed.")
+                    }
+                    var parser = AIStreamParser()
+                    for try await line in bytes.lines {
+                        try Task.checkCancellation()
+                        if let delta = try parser.consume(line), !delta.isEmpty {
+                            continuation.yield(delta)
+                        }
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    private static func check(response: URLResponse, data: Data) throws {
+        guard let status = (response as? HTTPURLResponse)?.statusCode else {
+            throw AIError.badResponse
+        }
+        guard (200..<300).contains(status) else {
+            let message = (try? JSONDecoder().decode(APIError.self, from: data))?
+                .error.message ?? "HTTP \(status)"
+            throw AIError.requestFailed("OpenAI: \(message)")
+        }
+    }
+}
+
+enum AIModelCatalog {
+    static let defaultModel = "gpt-5.6-luna"
+    static let options: [(id: String, name: String)] = [
+        ("gpt-5.6-luna", "GPT-5.6 Luna"),
+        ("gpt-5.6-terra", "GPT-5.6 Terra"),
+        ("gpt-5.6-sol", "GPT-5.6 Sol"),
+        ("gpt-6-astra", "GPT-6 Astra"),
+    ]
 }
 
 #if canImport(FoundationModels)
@@ -207,10 +285,39 @@ struct AppleIntelligenceClient: AIClient {
         let response = try await session.respond(to: prompt)
         return response.content
     }
+
+    func stream(system: String?, prompt: String) -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                let session: LanguageModelSession
+                if let system, !system.isEmpty {
+                    session = LanguageModelSession(instructions: system)
+                } else {
+                    session = LanguageModelSession()
+                }
+                var previous = ""
+                do {
+                    for try await snapshot in session.streamResponse(to: prompt) {
+                        try Task.checkCancellation()
+                        let content = snapshot.content
+                        let delta = content.hasPrefix(previous)
+                            ? String(content.dropFirst(previous.count))
+                            : content
+                        if !delta.isEmpty { continuation.yield(delta) }
+                        previous = content
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
 }
 #endif
 
-// MARK: - ChatGPT OAuth (experimental — borrows Codex CLI's public client)
+// MARK: - ChatGPT OAuth (Codex client flow)
 
 struct ChatGPTCredentials: Codable, Sendable {
     var accessToken: String
@@ -227,28 +334,23 @@ enum ChatGPTAuth {
     private static let keychainAccount = "chatgpt-credentials"
 
     static var credentials: ChatGPTCredentials? {
-        get {
-            KeychainStore.get(account: keychainAccount)
-                .flatMap { Data($0.utf8) }
-                .flatMap { try? JSONDecoder().decode(
-                    ChatGPTCredentials.self, from: $0
-                ) }
-        }
-        set {
-            if let newValue,
-               let data = try? JSONEncoder().encode(newValue) {
-                KeychainStore.set(
-                    String(decoding: data, as: UTF8.self),
-                    account: keychainAccount
-                )
-            } else {
-                KeychainStore.remove(account: keychainAccount)
-            }
-        }
+        KeychainStore.get(account: keychainAccount)
+            .flatMap { Data($0.utf8) }
+            .flatMap { try? JSONDecoder().decode(ChatGPTCredentials.self, from: $0) }
     }
 
     static func signOut() {
-        credentials = nil
+        KeychainStore.remove(account: keychainAccount)
+    }
+
+    private static func save(_ value: ChatGPTCredentials) throws {
+        let data = try JSONEncoder().encode(value)
+        guard KeychainStore.set(
+            String(decoding: data, as: UTF8.self),
+            account: keychainAccount
+        ) else {
+            throw AIError.authFailed("Could not save ChatGPT sign-in in Keychain.")
+        }
     }
 
     @MainActor
@@ -267,17 +369,19 @@ enum ChatGPTAuth {
             .init(name: "redirect_uri", value: redirectURI),
             .init(
                 name: "scope",
-                value: "openid profile email offline_access"
+                value: "openid profile email offline_access api.connectors.read api.connectors.invoke"
             ),
             .init(name: "code_challenge", value: challenge),
             .init(name: "code_challenge_method", value: "S256"),
             .init(name: "state", value: state),
+            .init(name: "id_token_add_organizations", value: "true"),
+            .init(name: "codex_cli_simplified_flow", value: "true"),
             .init(name: "originator", value: "leaf_native"),
         ]
-        NSWorkspace.shared.open(components.url!)
-
+        guard let authURL = components.url else { throw AIError.badResponse }
         let callback = try await server.waitForCallback(
-            expectedState: state
+            expectedState: state,
+            authorizationURL: authURL
         )
         let queryItems = URLComponents(
             url: callback,
@@ -320,18 +424,21 @@ enum ChatGPTAuth {
             accountID: accountID,
             obtainedAt: Date()
         )
-        self.credentials = credentials
+        try save(credentials)
         return credentials
     }
 
     static func refreshIfNeeded(
-        _ credentials: ChatGPTCredentials
+        _ credentials: ChatGPTCredentials,
+        force: Bool = false
     ) async throws -> ChatGPTCredentials {
-        // Access tokens live ~28 days in practice; refresh when older than
-        // a week, or lazily retry on 401 — handled in ChatGPTClient.
-        guard Date().timeIntervalSince(credentials.obtainedAt) > 7 * 86_400,
-              let refreshToken = credentials.refreshToken
-        else { return credentials }
+        let expiry = expiration(from: credentials.accessToken)
+        let needsRefresh = force || (expiry.map { $0 < Date().addingTimeInterval(300) }
+            ?? (Date().timeIntervalSince(credentials.obtainedAt) > 3600))
+        guard needsRefresh else { return credentials }
+        guard let refreshToken = credentials.refreshToken else {
+            throw AIError.authFailed("ChatGPT session expired. Sign in again in Settings.")
+        }
         let body: [String: String] = [
             "client_id": clientID,
             "grant_type": "refresh_token",
@@ -345,9 +452,12 @@ enum ChatGPTAuth {
         }
         if let idToken = tokens.idToken {
             refreshed.idToken = idToken
+            if let accountID = accountID(from: idToken) {
+                refreshed.accountID = accountID
+            }
         }
         refreshed.obtainedAt = Date()
-        self.credentials = refreshed
+        try save(refreshed)
         return refreshed
     }
 
@@ -374,15 +484,9 @@ enum ChatGPTAuth {
             "application/x-www-form-urlencoded",
             forHTTPHeaderField: "Content-Type"
         )
-        request.httpBody = body
-            .map { key, value in
-                let encoded = value.addingPercentEncoding(
-                    withAllowedCharacters: .urlQueryAllowed
-                ) ?? value
-                return "\(key)=\(encoded)"
-            }
-            .joined(separator: "&")
-            .data(using: .utf8)
+        var form = URLComponents()
+        form.queryItems = body.map { URLQueryItem(name: $0.key, value: $0.value) }
+        request.httpBody = form.percentEncodedQuery?.data(using: .utf8)
 
         let (data, response) = try await URLSession.shared.data(for: request)
         guard (response as? HTTPURLResponse)?.statusCode == 200 else {
@@ -411,6 +515,21 @@ enum ChatGPTAuth {
         return json["chatgpt_account_id"] as? String
     }
 
+    private static func expiration(from token: String) -> Date? {
+        let parts = token.split(separator: ".")
+        guard parts.count >= 2 else { return nil }
+        var base64 = String(parts[1])
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        while base64.count % 4 != 0 { base64.append("=") }
+        guard let data = Data(base64Encoded: base64),
+              let json = try? JSONSerialization.jsonObject(with: data)
+                as? [String: Any],
+              let seconds = json["exp"] as? TimeInterval
+        else { return nil }
+        return Date(timeIntervalSince1970: seconds)
+    }
+
     private static func randomVerifier() -> String {
         let chars = Array(
             "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~"
@@ -430,8 +549,6 @@ enum ChatGPTAuth {
 
 // One-shot localhost listener for the OAuth redirect.
 private final class LoopbackServer: @unchecked Sendable {
-    private var listener: NWListener?
-
     private final class Once: @unchecked Sendable {
         private let lock = NSLock()
         private var fired = false
@@ -445,81 +562,71 @@ private final class LoopbackServer: @unchecked Sendable {
         }
     }
 
-    func waitForCallback(expectedState: String) async throws -> URL {
+    func waitForCallback(
+        expectedState: String,
+        authorizationURL: URL
+    ) async throws -> URL {
         let listener = try NWListener(using: .tcp, on: 1455)
-        self.listener = listener
         defer { listener.cancel() }
-        let once = Once()
+        let completed = Once()
+        let opened = Once()
         return try await withCheckedThrowingContinuation { continuation in
             listener.newConnectionHandler = { connection in
                 connection.start(queue: .global())
                 connection.receive(minimumIncompleteLength: 1, maximumLength: 65_536) {
                     data, _, _, _ in
-                    guard once.claim() else { return }
-                    let request = data.flatMap {
-                        String(data: $0, encoding: .utf8)
-                    } ?? ""
-                    let responseData = Data(
-                        """
-                        HTTP/1.1 200 OK\r
-                        Content-Type: text/html\r
-                        Connection: close\r
-                        \r
-                        <h2>Signed in to Leaf Native</h2>
-                        <p>You can close this tab.</p>
-                        """.utf8
-                    )
+                    let request = data.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+                    let target = request.components(separatedBy: "\r\n")
+                        .first.flatMap { $0.split(separator: " ").dropFirst().first }
+                        .map(String.init)
+                    let url = target.flatMap { URL(string: "http://localhost\($0)") }
+                    let components = url.flatMap {
+                        URLComponents(url: $0, resolvingAgainstBaseURL: false)
+                    }
+                    let validPath = components?.path == "/auth/callback"
+                    let validState = components?.queryItems?
+                        .first(where: { $0.name == "state" })?.value == expectedState
+                    let accepted = validPath && validState && completed.claim()
+                    let hasCode = components?.queryItems?.contains(where: { $0.name == "code" })
+                        == true
+                    let body = accepted
+                        ? (hasCode
+                            ? "<h2>Signed in to Leaf Native</h2><p>You can close this tab.</p>"
+                            : "<h2>Sign-in was not completed</h2><p>Return to Leaf Native.</p>")
+                        : "<h2>Invalid sign-in callback</h2>"
+                    let status = accepted ? "200 OK" : "400 Bad Request"
+                    let response = "HTTP/1.1 \(status)\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n\(body)"
                     connection.send(
-                        content: responseData,
-                        completion: .contentProcessed { _ in
-                            connection.cancel()
-                        }
+                        content: Data(response.utf8),
+                        completion: .contentProcessed { _ in connection.cancel() }
                     )
-
-                    guard let line = request
-                        .components(separatedBy: "\r\n")
-                        .first,
-                        line.hasPrefix("GET "),
-                        let target = line
-                            .components(separatedBy: " ")
-                            .dropFirst()
-                            .first,
-                        let url = URL(
-                            string: "http://localhost\(target)"
-                        )
-                    else {
-                        continuation.resume(
-                            throwing: AIError.authFailed("Malformed callback")
-                        )
-                        return
+                    if accepted, let url {
+                        continuation.resume(returning: url)
                     }
-                    guard URLComponents(
-                        url: url,
-                        resolvingAgainstBaseURL: false
-                    )?.queryItems?
-                        .first(where: { $0.name == "state" })?.value
-                        == expectedState
-                    else {
-                        continuation.resume(throwing: AIError.authCancelled)
-                        return
-                    }
-                    continuation.resume(returning: url)
                 }
             }
             listener.stateUpdateHandler = { state in
-                if case .failed(let error) = state, once.claim() {
-                    continuation.resume(
-                        throwing: AIError.authFailed(
-                            "Local server failed: \(error.localizedDescription)"
-                        )
-                    )
+                switch state {
+                case .ready where opened.claim():
+                    Task { @MainActor in
+                        if !NSWorkspace.shared.open(authorizationURL), completed.claim() {
+                            continuation.resume(throwing: AIError.authFailed(
+                                "Could not open the ChatGPT sign-in page."
+                            ))
+                        }
+                    }
+                case .failed(let error) where completed.claim():
+                    continuation.resume(throwing: AIError.authFailed(
+                        "Local sign-in server failed: \(error.localizedDescription)"
+                    ))
+                default:
+                    break
                 }
             }
             listener.start(queue: .global())
             Task {
                 try? await Task.sleep(for: .seconds(300))
-                if once.claim() {
-                    listener.cancel()
+                if completed.claim() {
                     continuation.resume(throwing: AIError.authCancelled)
                 }
             }
@@ -527,11 +634,43 @@ private final class LoopbackServer: @unchecked Sendable {
     }
 }
 
-// MARK: - ChatGPT API client (Responses API on the codex backend)
+// MARK: - ChatGPT client (Codex streaming backend)
+
+struct AIStreamParser {
+    private(set) var receivedDelta = false
+
+    mutating func consume(_ line: String) throws -> String? {
+        guard line.hasPrefix("data:") else { return nil }
+        let payload = String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces)
+        guard let json = try? JSONSerialization.jsonObject(
+            with: Data(payload.utf8)
+        ) as? [String: Any] else { return nil }
+        switch json["type"] as? String {
+        case "response.output_text.delta":
+            receivedDelta = true
+            return json["delta"] as? String
+        case "response.completed":
+            if !receivedDelta,
+               let response = json["response"] as? [String: Any] {
+                return ChatGPTClient.outputText(from: response)
+            }
+        case "response.failed":
+            let response = json["response"] as? [String: Any]
+            let detail = response?["error"] as? [String: Any]
+            throw AIError.requestFailed(
+                detail?["message"] as? String ?? "The AI response failed."
+            )
+        default:
+            break
+        }
+        return nil
+    }
+}
 
 struct ChatGPTClient: AIClient {
     var credentials: ChatGPTCredentials
-    var model: String = "gpt-5.4-mini"
+    var model: String = AIModelCatalog.defaultModel
+    var session: URLSession = .shared
 
     struct RequestBody: Encodable {
         struct Input: Encodable {
@@ -544,14 +683,90 @@ struct ChatGPTClient: AIClient {
             let content: [Content]
         }
         let model: String
-        let instructions: String?
+        let instructions: String
         let input: [Input]
-        let stream = false
+        let stream = true
         let store = false
     }
 
     func respond(system: String?, prompt: String) async throws -> String {
-        let fresh = try await ChatGPTAuth.refreshIfNeeded(credentials)
+        var fresh = try await ChatGPTAuth.refreshIfNeeded(credentials)
+        let instructions = (system?.isEmpty == false ? system : nil)
+            ?? "You are a helpful reading assistant."
+        let body = try JSONEncoder().encode(
+            RequestBody(
+                model: model,
+                instructions: instructions,
+                input: [.init(role: "user", content: [.init(text: prompt)])]
+            )
+        )
+        var (data, response) = try await session.data(
+            for: makeRequest(credentials: fresh, body: body)
+        )
+        if (response as? HTTPURLResponse)?.statusCode == 401 {
+            fresh = try await ChatGPTAuth.refreshIfNeeded(fresh, force: true)
+            (data, response) = try await session.data(
+                for: makeRequest(credentials: fresh, body: body)
+            )
+        }
+        guard let status = (response as? HTTPURLResponse)?.statusCode else {
+            throw AIError.badResponse
+        }
+        guard status == 200 else {
+            let detail = String(data: data, encoding: .utf8)?.prefix(250)
+            throw AIError.requestFailed(
+                "ChatGPT request failed (HTTP \(status)): \(detail ?? "No details")"
+            )
+        }
+        return try Self.extractText(from: data)
+    }
+
+    func stream(system: String?, prompt: String) -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    var fresh = try await ChatGPTAuth.refreshIfNeeded(credentials)
+                    let instructions = (system?.isEmpty == false ? system : nil)
+                        ?? "You are a helpful reading assistant."
+                    let body = try JSONEncoder().encode(
+                        RequestBody(
+                            model: model,
+                            instructions: instructions,
+                            input: [.init(role: "user", content: [.init(text: prompt)])]
+                        )
+                    )
+                    var (bytes, response) = try await session.bytes(
+                        for: makeRequest(credentials: fresh, body: body)
+                    )
+                    if (response as? HTTPURLResponse)?.statusCode == 401 {
+                        fresh = try await ChatGPTAuth.refreshIfNeeded(fresh, force: true)
+                        (bytes, response) = try await session.bytes(
+                            for: makeRequest(credentials: fresh, body: body)
+                        )
+                    }
+                    guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+                        throw AIError.requestFailed("ChatGPT request failed.")
+                    }
+                    var parser = AIStreamParser()
+                    for try await line in bytes.lines {
+                        try Task.checkCancellation()
+                        if let delta = try parser.consume(line), !delta.isEmpty {
+                            continuation.yield(delta)
+                        }
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    private func makeRequest(
+        credentials: ChatGPTCredentials,
+        body: Data
+    ) -> URLRequest {
         var request = URLRequest(
             url: URL(
                 string: "https://chatgpt.com/backend-api/codex/responses"
@@ -560,56 +775,66 @@ struct ChatGPTClient: AIClient {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(
-            "Bearer \(fresh.accessToken)",
+            "Bearer \(credentials.accessToken)",
             forHTTPHeaderField: "Authorization"
         )
         request.setValue(
-            fresh.accountID, forHTTPHeaderField: "ChatGPT-Account-ID"
+            credentials.accountID, forHTTPHeaderField: "ChatGPT-Account-ID"
         )
+        request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
         request.setValue("responses=v1", forHTTPHeaderField: "OpenAI-Beta")
         request.setValue("leaf_native", forHTTPHeaderField: "originator")
         request.setValue(
             UUID().uuidString, forHTTPHeaderField: "session_id"
         )
-        request.httpBody = try JSONEncoder().encode(
-            RequestBody(
-                model: model,
-                instructions: system,
-                input: [
-                    .init(role: "user", content: [.init(text: prompt)])
-                ]
-            )
-        )
-
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard (response as? HTTPURLResponse)?.statusCode == 200 else {
-            let detail =
-                String(data: data, encoding: .utf8)?.prefix(300) ?? "no details"
-            throw AIError.requestFailed(
-                "ChatGPT request failed: \(detail)"
-            )
-        }
-        return try extractText(from: data)
+        request.httpBody = body
+        return request
     }
 
-    private func extractText(from data: Data) throws -> String {
-        guard let root = try JSONSerialization.jsonObject(with: data)
-            as? [String: Any],
-              let output = root["output"] as? [[String: Any]]
-        else { throw AIError.badResponse }
-        var parts: [String] = []
-        for item in output where item["type"] as? String == "message" {
-            guard let content = item["content"] as? [[String: Any]] else {
-                continue
-            }
-            for piece in content
-            where piece["type"] as? String == "output_text" {
-                if let text = piece["text"] as? String {
-                    parts.append(text)
+    static func extractText(from data: Data) throws -> String {
+        guard let stream = String(data: data, encoding: .utf8) else {
+            throw AIError.badResponse
+        }
+        var deltas = ""
+        var completedText: String?
+        for line in stream.replacingOccurrences(of: "\r\n", with: "\n")
+            .components(separatedBy: "\n") where line.hasPrefix("data:") {
+            let payload = String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces)
+            guard let json = try? JSONSerialization.jsonObject(
+                with: Data(payload.utf8)
+            ) as? [String: Any] else { continue }
+            switch json["type"] as? String {
+            case "response.output_text.delta":
+                deltas += json["delta"] as? String ?? ""
+            case "response.completed":
+                if let response = json["response"] as? [String: Any] {
+                    completedText = outputText(from: response)
                 }
+            case "response.failed":
+                let response = json["response"] as? [String: Any]
+                let error = response?["error"] as? [String: Any]
+                throw AIError.requestFailed(
+                    error?["message"] as? String ?? "ChatGPT response failed."
+                )
+            default:
+                break
             }
         }
-        guard !parts.isEmpty else { throw AIError.badResponse }
-        return parts.joined(separator: "\n")
+        if let completedText, !completedText.isEmpty { return completedText }
+        guard !deltas.isEmpty else { throw AIError.badResponse }
+        return deltas
+    }
+
+    static func outputText(from response: [String: Any]) -> String? {
+        guard let output = response["output"] as? [[String: Any]] else { return nil }
+        let parts = output.compactMap { item -> [String]? in
+            guard item["type"] as? String == "message",
+                  let content = item["content"] as? [[String: Any]]
+            else { return nil }
+            return content.compactMap {
+                $0["type"] as? String == "output_text" ? $0["text"] as? String : nil
+            }
+        }.flatMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: "\n")
     }
 }

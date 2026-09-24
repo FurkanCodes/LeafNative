@@ -107,7 +107,7 @@ struct ReaderScreen: View {
                 }
 
                 Button {
-                    store.aiPanelVisible = true
+                    store.openAICompanion()
                 } label: {
                     Label("Ask AI", systemImage: "sparkles")
                 }
@@ -124,7 +124,12 @@ struct ReaderScreen: View {
                 }
 
                 Button {
-                    store.inspectorVisible.toggle()
+                    if store.inspectorVisible && store.companionPane == .notebook {
+                        store.inspectorVisible = false
+                    } else {
+                        store.companionPane = .notebook
+                        store.inspectorVisible = true
+                    }
                 } label: {
                     Label(
                         store.inspectorVisible ? "Hide Notebook" : "Show Notebook",
@@ -202,13 +207,27 @@ struct ReaderScreen: View {
         store.isLoading = true
         store.loadingError = nil
         store.loadedContent = nil
+        store.researchContentHash = ""
         let format = book.format
         let fileURL = book.fileURL
         Task {
             do {
-                let content = try await Task.detached(priority: .userInitiated) {
-                    try ContentLoader.load(format: format, fileURL: fileURL)
+                let (content, currentHash) = try await Task.detached(priority: .userInitiated) {
+                    let content = try ContentLoader.load(format: format, fileURL: fileURL)
+                    let text: String?
+                    switch content {
+                    case .attributedText(let value), .epub(let value, _):
+                        text = value.string
+                    default:
+                        text = nil
+                    }
+                    let hash = ResearchContentHash.value(format: format, url: fileURL, text: text)
+                    return (content, hash)
                 }.value
+                if let currentHash, currentHash != store.researchContentHash {
+                    store.researchContentHash = currentHash
+                    await ResearchIndex.shared.clear(bookID: book.id)
+                }
                 store.loadedContent = content
                 if case .epub(_, let entries) = content {
                     store.setContents(entries)
@@ -567,29 +586,92 @@ struct SettingsView: View {
                 case .openAI:
                     SecureField(
                         store.openAIKeyPresent
-                            ? "API key saved (paste to replace)"
-                            : "OpenAI API key (sk-...)",
+                            ? "Paste a new API key to replace the saved key"
+                            : "OpenAI Platform API key",
                         text: $openAIKeyDraft
                     )
                     .textFieldStyle(.roundedBorder)
-                    .onSubmit {
-                        store.saveOpenAIKey(openAIKeyDraft)
-                        openAIKeyDraft = ""
+                    .disabled(store.openAIConnectionStatus == .working)
+                    .onChange(of: store.openAIConnectionStatus) {
+                        if store.openAIKeyPresent,
+                           store.openAIConnectionStatus == .idle {
+                            openAIKeyDraft = ""
+                        }
                     }
-                    TextField("Model", text: $store.openAIModel)
+                    .onSubmit {
+                        store.connectOpenAI(openAIKeyDraft)
+                    }
+                    HStack {
+                        Button(store.openAIKeyPresent ? "Replace Key" : "Connect") {
+                            store.connectOpenAI(openAIKeyDraft)
+                        }
+                        .disabled(openAIKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            || store.openAIConnectionStatus == .working)
+                        if store.openAIConnectionStatus == .working {
+                            ProgressView().controlSize(.small)
+                        }
+                        if store.openAIKeyPresent {
+                            Text("API key saved")
+                                .foregroundStyle(.secondary)
+                            Button("Remove Key") {
+                                store.disconnectOpenAI()
+                            }
+                            .disabled(store.openAIConnectionStatus == .working)
+                        }
+                    }
+                    if case .failed(let message) = store.openAIConnectionStatus {
+                        Text(message)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
+                    Link(
+                        "Create an OpenAI API key",
+                        destination: URL(string: "https://platform.openai.com/api-keys")!
+                    )
+                    .font(.caption)
+                    Picker("Model", selection: $store.openAIModel) {
+                        ForEach(AIModelCatalog.options, id: \.id) { option in
+                            Text(option.name).tag(option.id)
+                        }
+                        if !AIModelCatalog.options.contains(where: { $0.id == store.openAIModel }) {
+                            Text(store.openAIModel).tag(store.openAIModel)
+                        }
+                    }
+                    TextField("Custom model ID", text: $store.openAIModel)
                         .textFieldStyle(.roundedBorder)
                 case .chatGPT:
-                    if store.chatGPTSignedIn {
-                        LabeledContent("Status", value: "Signed in")
-                        Button("Sign Out") {
-                            store.signOutChatGPT()
+                    HStack {
+                        if store.chatGPTSignedIn {
+                            Text("Signed in")
+                                .foregroundStyle(.secondary)
+                            Button("Sign Out") {
+                                store.signOutChatGPT()
+                            }
+                            .disabled(store.chatGPTAuthStatus == .working)
+                        } else {
+                            Button("Sign in with ChatGPT…") {
+                                store.signInChatGPT()
+                            }
+                            .disabled(store.chatGPTAuthStatus == .working)
                         }
-                    } else {
-                        Button("Sign in with ChatGPT…") {
-                            store.signInChatGPT()
+                        if store.chatGPTAuthStatus == .working {
+                            ProgressView().controlSize(.small)
                         }
                     }
-                    TextField("Model", text: $store.chatGPTModel)
+                    if case .failed(let message) = store.chatGPTAuthStatus {
+                        Text(message)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
+                    Picker("Model", selection: $store.chatGPTModel) {
+                        ForEach(AIModelCatalog.options, id: \.id) { option in
+                            Text(option.name).tag(option.id)
+                        }
+                        if !AIModelCatalog.options.contains(where: { $0.id == store.chatGPTModel }) {
+                            Text(store.chatGPTModel).tag(store.chatGPTModel)
+                        }
+                    }
+                    TextField("Custom model ID", text: $store.chatGPTModel)
                         .textFieldStyle(.roundedBorder)
                 case .appleIntelligence:
                     EmptyView()
@@ -640,6 +722,9 @@ struct SettingsView: View {
                 }
                 .font(.caption)
             }
+        }
+        .task {
+            store.refreshAIConnectionStatus()
         }
         .formStyle(.grouped)
         .padding()

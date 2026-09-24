@@ -5,13 +5,16 @@ AI reading assistance, built for researchers.
 ## Highlights
 
 - **Ask AI About This** — select any passage in a PDF or text book, right-click → *Ask AI About This*, and chat with the book's context attached
-- **AI panel** — a sparkles button in the reader toolbar opens a chat that knows which book, chapter, and passage you're on
+- **Research companion pane** — share a resizable side pane with Notebook, keep multiple local conversations per book, and read streamed Markdown answers with links, lists, tables, and code blocks
+- **Traceable answers** — retrieve text from the open document, prioritize a selected passage, and jump from numbered citations to the cited page or text position
+- **Paper discovery** — search OpenAlex for related papers, confirm DOI bibliographic metadata with Crossref, and import downloaded PDFs for full-text analysis
 - **One-tap actions** — summarize the current section, or generate review quiz questions from your highlights
+- **Conversation controls** — stop, retry, or copy an answer; the reader remains usable beside the chat
 - **Three providers** — pick in Settings → AI Assistant:
   - *Apple Intelligence* — free, private, on-device (macOS 26+)
-  - *OpenAI API key* — bring your own key (stored in Keychain), pick any model
-  - *ChatGPT account* — experimental sign-in using your ChatGPT subscription. Relies on undocumented OpenAI internals and may stop working — if it breaks, the other providers still work
-- Your API key and sign-in tokens live in the macOS Keychain, never in files
+  - *OpenAI API* — connect with an OpenAI Platform API key, choose a current model or enter a custom model ID
+  - *ChatGPT account* — sign in with the Codex OAuth flow and use a ChatGPT subscription model. This route depends on Codex's private backend and may change.
+- API keys and ChatGPT tokens are stored in the macOS Keychain. OpenAI API usage is billed separately from ChatGPT subscriptions.
 
 ## Downloads
 
