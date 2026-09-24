@@ -1,6 +1,8 @@
 import XCTest
 import ZIPFoundation
 import SwiftData
+import NaturalLanguage
+import AppKit
 @testable import LeafNative
 
 private final class PaperUnavailableURLProtocol: URLProtocol {
@@ -50,7 +52,7 @@ private final class PaperMetadataURLProtocol: URLProtocol {
 
 final class ResearchCompanionTests: XCTestCase {
     func testCurrentPassageWinsOverWholeDocumentMatches() async {
-        let index = ResearchIndex()
+        let index = ResearchIndex(vectorDirectory: nil)
         let selected = IndexedPassage(
             locator: "pdf:7",
             label: "Page 8",
@@ -70,7 +72,7 @@ final class ResearchCompanionTests: XCTestCase {
     }
 
     func testGenericPassageQuestionDoesNotPullUnrelatedPages() async {
-        let index = ResearchIndex()
+        let index = ResearchIndex(vectorDirectory: nil)
         let selected = IndexedPassage(
             locator: "pdf:7", label: "Page 8", text: "Adult neurogenesis is discussed here."
         )
@@ -642,5 +644,142 @@ final class ContentLoaderTests: XCTestCase {
                 return XCTFail("expected .missingFile, got \(error)")
             }
         }
+    }
+}
+
+final class ResearchRetrievalTests: XCTestCase {
+    private func filler(_ count: Int) -> String {
+        String(repeating: "Unrelated filler describes weather patterns over coastal towns. ", count: count)
+    }
+
+    func testEveryRelevantChunkOnAPDFPageCanBeRetrieved() async throws {
+        let first = "Hippocampal replay strengthens memory traces overnight. " + filler(20)
+        let second = filler(20) + "Hippocampal replay also predicts next-day recall. "
+        let url = try makePDF(pages: [first + second])
+        let chunks = ResearchIndex.extract(format: .pdf, url: url, text: nil)
+        XCTAssertGreaterThan(chunks.count, 1)
+        XCTAssertTrue(chunks.allSatisfy { $0.locator == "pdf:0" })
+
+        let citations = await ResearchIndex(vectorDirectory: nil).search(
+            bookID: UUID(), contentHash: "pdf", format: .pdf, url: url,
+            extractedText: nil, question: "hippocampal replay", selected: nil,
+            semanticWait: .zero
+        )
+        XCTAssertTrue(citations.contains { $0.quote.contains("strengthens memory") })
+        XCTAssertTrue(citations.contains { $0.quote.contains("next-day recall") })
+    }
+
+    func testStemmingMatchesWordForms() async {
+        XCTAssertEqual(ResearchIndex.stem("consolidating"), ResearchIndex.stem("consolidation"))
+        XCTAssertEqual(ResearchIndex.stem("consolidated"), ResearchIndex.stem("consolidate"))
+        XCTAssertEqual(ResearchIndex.stem("memories"), ResearchIndex.stem("memory"))
+        XCTAssertEqual(ResearchIndex.stem("processes"), ResearchIndex.stem("process"))
+        XCTAssertEqual(ResearchIndex.stem("learning"), ResearchIndex.stem("learned"))
+
+        let citations = await ResearchIndex(vectorDirectory: nil).search(
+            bookID: UUID(), contentHash: "stem", format: .txt, url: nil,
+            extractedText: filler(40) + "Consolidation of memories happens during rest. " + filler(40),
+            question: "When are memory traces consolidated?", selected: nil,
+            semanticWait: .zero
+        )
+        XCTAssertEqual(citations.first.map { $0.quote.contains("Consolidation of memories") }, true)
+    }
+
+    func testRareTermsOutrankCommonOnes() async {
+        let text = String(repeating: "The model explains behavior in many settings. ", count: 60)
+            + filler(30) + "Only here does the model mention dopamine. " + filler(30)
+        let citations = await ResearchIndex(vectorDirectory: nil).search(
+            bookID: UUID(), contentHash: "idf", format: .txt, url: nil,
+            extractedText: text, question: "model dopamine", selected: nil,
+            semanticWait: .zero
+        )
+        XCTAssertTrue(citations.first?.quote.contains("dopamine") ?? false)
+    }
+
+    func testSemanticSearchFindsParaphrasesWithoutSharedWords() async throws {
+        let embedding = NLEmbedding.sentenceEmbedding(for: .english)
+        try XCTSkipIf(embedding == nil, "English sentence embedding unavailable")
+        let text = [
+            "The Treaty of Westphalia ended decades of war and redrew the political map of Europe.",
+            "Photosynthesis turns light into chemical energy that plants store as glucose.",
+            "During slow-wave sleep the hippocampus replays the day's experiences, stabilizing them in cortex.",
+            "Participants completed a questionnaire about their commute and household income.",
+        ].map { $0 + " " + String(repeating: "\n", count: 1) }.joined(separator: filler(18))
+        let citations = await ResearchIndex(vectorDirectory: nil).search(
+            bookID: UUID(), contentHash: "semantic", format: .txt, url: nil,
+            extractedText: text, question: "How are memories strengthened at night?",
+            selected: nil, semanticWait: .seconds(30)
+        )
+        XCTAssertTrue(citations.first?.quote.contains("hippocampus") ?? false, "\(citations.map(\.quote))")
+    }
+
+    func testChunksBreakAtSentencesAndOverlap() {
+        let sentence = "This sentence is exactly about sixty characters long, roughly. "
+        let text = String(repeating: sentence, count: 60)
+        let chunks = ResearchIndex.chunks(text)
+        XCTAssertGreaterThan(chunks.count, 2)
+        for (range, fragment) in chunks.dropLast() {
+            XCTAssertTrue(fragment.hasSuffix("roughly."), fragment)
+            XCTAssertLessThanOrEqual(range.length, ResearchIndex.chunkLength)
+        }
+        for (previous, next) in zip(chunks, chunks.dropFirst()) {
+            XCTAssertLessThan(next.0.location, NSMaxRange(previous.0), "chunks should overlap")
+            XCTAssertGreaterThan(next.0.location, previous.0.location)
+        }
+        XCTAssertEqual(NSMaxRange(chunks.last!.0), (text as NSString).length)
+    }
+
+    func testCitationLabelsUseSectionTitles() async throws {
+        let text = "Introduction text. " + filler(30) + "Methods: we sampled zebrafish larvae. " + filler(10)
+        let methodsOffset = (text as NSString).range(of: "Methods:").location
+        let contents = [
+            BookContentEntry(id: "1", title: "Introduction", locator: "text:0:0", level: 0),
+            BookContentEntry(id: "2", title: "Methods", locator: "text:\(methodsOffset - 5):0", level: 0),
+        ]
+        let citations = await ResearchIndex(vectorDirectory: nil).search(
+            bookID: UUID(), contentHash: "labels", format: .txt, url: nil,
+            extractedText: text, question: "zebrafish", selected: nil,
+            contents: contents, semanticWait: .zero
+        )
+        let hit = try XCTUnwrap(citations.first { $0.quote.contains("zebrafish") })
+        XCTAssertTrue(["Methods", "Introduction"].contains(hit.label))
+
+        let pdf = try makePDF(pages: ["Cover", "Zebrafish larvae were sampled."])
+        let pdfCitations = await ResearchIndex(vectorDirectory: nil).search(
+            bookID: UUID(), contentHash: "pdf-labels", format: .pdf, url: pdf,
+            extractedText: nil, question: "zebrafish", selected: nil,
+            contents: [BookContentEntry(id: "m", title: "Methods", locator: "pdf:1", level: 0)],
+            semanticWait: .zero
+        )
+        XCTAssertEqual(pdfCitations.first?.label, "Page 2 · Methods")
+    }
+
+    func testVectorStoreRoundTrips() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString).appendingPathComponent("v.vectors")
+        let vectors = EmbeddingMatrix(rows: 2, dimension: 3, values: [0.1, 0.2, 0.3, -1, 0, 1])
+        ResearchVectorStore.write(vectors, to: url)
+        XCTAssertEqual(ResearchVectorStore.read(url), vectors)
+        try Data([1, 2, 3]).write(to: url)
+        XCTAssertNil(ResearchVectorStore.read(url))
+    }
+
+    private func makePDF(pages: [String]) throws -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString).appendingPathExtension("pdf")
+        var box = CGRect(x: 0, y: 0, width: 612, height: 792)
+        let context = try XCTUnwrap(CGContext(url as CFURL, mediaBox: &box, nil))
+        for page in pages {
+            context.beginPDFPage(nil)
+            let attributed = NSAttributedString(
+                string: page, attributes: [.font: NSFont.systemFont(ofSize: 7)]
+            )
+            let framesetter = CTFramesetterCreateWithAttributedString(attributed)
+            let path = CGPath(rect: box.insetBy(dx: 36, dy: 36), transform: nil)
+            CTFrameDraw(CTFramesetterCreateFrame(framesetter, CFRange(), path, nil), context)
+            context.endPDFPage()
+        }
+        context.closePDF()
+        return url
     }
 }

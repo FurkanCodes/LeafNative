@@ -228,6 +228,19 @@ struct ReaderScreen: View {
                     store.researchContentHash = currentHash
                     await ResearchIndex.shared.clear(bookID: book.id)
                 }
+                if let currentHash {
+                    let text: String? = switch content {
+                    case .attributedText(let value), .epub(let value, _): value.string
+                    default: nil
+                    }
+                    let bookID = book.id
+                    Task.detached(priority: .utility) {
+                        await ResearchIndex.shared.prepare(
+                            bookID: bookID, contentHash: currentHash, format: format,
+                            url: fileURL, extractedText: text
+                        )
+                    }
+                }
                 store.loadedContent = content
                 if case .epub(_, let entries) = content {
                     store.setContents(entries)

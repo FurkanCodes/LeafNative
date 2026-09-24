@@ -292,13 +292,14 @@ struct AIChatView: View {
         let bookTitle = book.title
         let format = book.format
         let url = book.fileURL
+        let contents = store.contents
 
         requestTask = Task { @MainActor in
             do {
                 let citations = await ResearchIndex.shared.search(
                     bookID: bookID, contentHash: bookHash, format: format,
                     url: url, extractedText: documentText,
-                    question: question, selected: selected
+                    question: question, selected: selected, contents: contents
                 )
                 try Task.checkCancellation()
                 assistant.citations = citations
